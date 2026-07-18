@@ -1,0 +1,15 @@
+{
+  "name": "clash-verge-fastest-node",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local UI for testing and switching Clash Verge nodes by region",
+  "license": "MIT",
+  "repository": "https://github.com/xuytwinter/clash-node-pilot.git",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

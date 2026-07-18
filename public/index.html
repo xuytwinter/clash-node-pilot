@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clash 节点优选</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="mark">C</span><div><strong>节点优选</strong><span>Clash Verge 本地控制台</span></div></div>
+    <div id="connection" class="connection"><span></span>正在连接</div>
+  </header>
+  <main>
+    <section class="summary">
+      <div><p class="eyebrow">当前出口</p><h1 id="activeNode">读取中...</h1><p id="activeGroup" class="muted">正在读取 Mihomo 控制器</p></div>
+      <button id="refreshButton" class="icon-button" title="刷新状态" aria-label="刷新状态">↻</button>
+    </section>
+
+    <section class="workspace">
+      <div class="controls">
+        <label for="groupSelect">切换代理组</label>
+        <select id="groupSelect"></select>
+        <label>目标地区</label>
+        <div id="regions" class="regions" role="radiogroup"></div>
+        <div class="settings-row">
+          <label class="check"><input id="autoSwitch" type="checkbox" checked><span>测速后自动切换</span></label>
+          <button id="settingsButton" class="text-button" type="button">测速设置</button>
+        </div>
+        <div id="advanced" class="advanced" hidden>
+          <label for="testUrl">测速地址</label><input id="testUrl" type="url">
+          <label for="timeout">超时（毫秒）</label><input id="timeout" type="number" min="1000" max="10000" step="500">
+        </div>
+        <button id="optimizeButton" class="primary" disabled><span class="bolt">⚡</span><span>开始测速并优选</span></button>
+        <p id="message" class="message" aria-live="polite"></p>
+      </div>
+
+      <div class="results-panel">
+        <div class="panel-heading"><div><p class="eyebrow">测速结果</p><h2>节点排名</h2></div><span id="resultCount" class="count">0 个节点</span></div>
+        <div id="empty" class="empty"><div class="signal">⌁</div><strong>等待开始测速</strong><span>选择地区后，这里会按延迟从低到高排列</span></div>
+        <div id="results" class="results"></div>
+      </div>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
