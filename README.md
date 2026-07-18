@@ -16,6 +16,8 @@ A local node optimizer for Clash Verge Rev and Mihomo. It follows the proxy grou
 - Switches only the selected manual `Selector` group and never edits subscription files.
 - Keeps the Mihomo controller secret on the local backend; it is never sent to the browser.
 - Includes a responsive local dashboard and Windows auto-start scripts.
+- Persists optimizer settings, manual locks, node health, and the latest 100 runs across restarts.
+- Applies a configurable switch threshold and persistent failure-rate penalty to avoid unstable nodes.
 
 ## Requirements
 
@@ -51,6 +53,8 @@ powershell.exe -ExecutionPolicy Bypass -File .\install-autostart-admin.ps1
 
 The optimizer runs every three minutes. Logs are written to `auto-optimize.log` and are excluded from Git.
 
+Runtime state is stored locally in `data/state.json`. The `data` directory is excluded from Git and never contains the Mihomo controller secret.
+
 To remove the startup entries:
 
 ```powershell
@@ -78,6 +82,11 @@ The default probe is `https://www.gstatic.com/generate_204` with a 5000 ms timeo
 | `PORT` | Local dashboard port | `3210` |
 | `CLASH_CONFIG` | Clash Verge runtime config path | Auto-detected from `%APPDATA%` |
 | `CLASH_TARGET_GROUP` | Fallback group if the Clash Verge UI selection cannot be read | `🐟漏网之鱼` |
+| `CLASH_PILOT_STATE` | Override the persistent runtime-state file | `data/state.json` |
+| `SWITCH_THRESHOLD_MS` | Initial minimum latency improvement required to switch | `25` |
+| `MANUAL_PAUSE_MINUTES` | Initial protection period after manual selection | `15` |
+
+The dashboard can change the switch threshold, sample count, and manual protection time. It also provides monitor-only mode, a temporary lock, recent run history, and a latency trend view.
 
 ## Tests
 
