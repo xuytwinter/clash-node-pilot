@@ -3,6 +3,7 @@ node_modules/
 work/
 outputs/
 *.log
+*.zip
 .DS_Store
 Thumbs.db
 .env
