@@ -290,6 +290,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) await apiHandler(req, res, url);
     else await staticHandler(res, url);
   } catch (error) {
+    if (req.url?.startsWith('/api/auto-optimize')) runtime.running = false;
     const status = error.code === 'ENOENT' ? 404 : error.name === 'TimeoutError' ? 504 : error.status || 500;
     sendJson(res, status, { error: status === 500 ? `无法连接 Clash Verge：${error.message}` : error.message });
   }
