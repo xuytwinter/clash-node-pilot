@@ -16,8 +16,12 @@ const WEBVIEW_LEVELDB = path.join(
   'io.github.clash-verge-rev.clash-verge-rev', 'EBWebView', 'Default', 'Local Storage', 'leveldb'
 );
 const DEFAULT_TEST_URL = 'https://www.gstatic.com/generate_204';
+const VERIFY_TEST_URL = 'https://cp.cloudflare.com/generate_204';
 const TARGET_GROUP = process.env.CLASH_TARGET_GROUP || '🐟漏网之鱼';
+const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
+const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
+const runtime = { running: false, startedAt: null, history: [], locks: new Map(), lastAuto: new Map(), nextRunAt: null };
 
 const REGIONS = [
   { id: 'jp', label: '日本', flag: '🇯🇵', pattern: /🇯🇵|日本|东京|東京|大阪|名古屋|jp\b|japan|tokyo|osaka/i },
@@ -121,6 +125,23 @@ async function measureNode(name, testUrl, timeout) {
   }
 }
 
+async function measureNodeStable(name, testUrl, timeout, samples = 2) {
+  const attempts = [];
+  for (let index = 0; index < samples; index++) attempts.push(await measureNode(name, testUrl, timeout));
+  const delays = attempts.filter((item) => item.ok).map((item) => item.delay).sort((a, b) => a - b);
+  if (!delays.length) return { name, delay: null, ok: false, error: attempts.at(-1)?.error || 'All samples failed', samples: attempts };
+  return { name, delay: delays[Math.floor(delays.length / 2)], ok: true, samples: attempts };
+}
+
+function addHistory(entry) {
+  runtime.history.unshift({ at: new Date().toISOString(), ...entry });
+  runtime.history = runtime.history.slice(0, 30);
+}
+
+function lockRemaining(group) {
+  return Math.max(0, (runtime.locks.get(group) || 0) - Date.now());
+}
+
 async function mapLimit(items, limit, mapper) {
   const results = new Array(items.length);
   let cursor = 0;
@@ -157,8 +178,19 @@ async function apiHandler(req, res, url) {
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
       targetSource: (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
+      automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0 },
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/automation') {
+    const body = await readJson(req);
+    const { groups } = await inventory();
+    const group = await pickPrimaryGroup(groups);
+    if (!group) return sendJson(res, 404, { error: 'No active selector group' });
+    if (body.action === 'lock') runtime.locks.set(group.name, Date.now() + MANUAL_PAUSE_MS);
+    if (body.action === 'unlock') runtime.locks.delete(group.name);
+    if (body.action === 'monitor') runtime.monitorOnly = Boolean(body.value);
+    return sendJson(res, 200, { lockMs: lockRemaining(group.name), monitorOnly: Boolean(runtime.monitorOnly) });
   }
   if (req.method === 'POST' && url.pathname === '/api/optimize') {
     const body = await readJson(req);
@@ -187,13 +219,25 @@ async function apiHandler(req, res, url) {
     return sendJson(res, 200, { region: region.label, group: group.name, previous: group.now, active, best, switched: group.now !== active, results });
   }
   if (req.method === 'POST' && url.pathname === '/api/auto-optimize') {
+    if (runtime.running) return sendJson(res, 409, { skipped: true, reason: '已有优选任务正在运行' });
+    runtime.running = true;
+    runtime.startedAt = new Date().toISOString();
     const { groups } = await inventory();
     const group = await pickPrimaryGroup(groups);
-    if (!group) return sendJson(res, 404, { skipped: true, reason: '没有可用的手动代理组' });
+    if (!group) { runtime.running = false; return sendJson(res, 404, { skipped: true, reason: '没有可用的手动代理组' }); }
+    const locked = lockRemaining(group.name);
+    if (locked > 0) { runtime.running = false; addHistory({ group: group.name, skipped: true, reason: '手动保护中', lockMs: locked }); return sendJson(res, 200, { skipped: true, reason: '手动保护中', lockMs: locked, group: group.name }); }
+    const previousAuto = runtime.lastAuto.get(group.name);
+    if (previousAuto && previousAuto !== group.now) {
+      runtime.locks.set(group.name, Date.now() + MANUAL_PAUSE_MS);
+      runtime.running = false;
+      addHistory({ group: group.name, skipped: true, reason: '检测到手动切换', lockMs: MANUAL_PAUSE_MS });
+      return sendJson(res, 200, { skipped: true, reason: '检测到手动切换，已暂停自动切换', lockMs: MANUAL_PAUSE_MS, group: group.name, active: group.now });
+    }
     const currentRegion = regionFor(group.now);
-    if (currentRegion === 'other') return sendJson(res, 200, { skipped: true, reason: '当前节点地区无法识别', group: group.name, current: group.now });
+    if (currentRegion === 'other') { runtime.running = false; return sendJson(res, 200, { skipped: true, reason: '当前节点地区无法识别', group: group.name, current: group.now }); }
     const candidates = group.members.filter((name) => regionFor(name) === currentRegion);
-    let results = candidates.length ? await mapLimit(candidates, 6, (name) => measureNode(name, DEFAULT_TEST_URL, 5000)) : [];
+    let results = candidates.length ? await mapLimit(candidates, 6, (name) => measureNodeStable(name, DEFAULT_TEST_URL, 5000, 2)) : [];
     results.sort((a, b) => (a.delay ?? Infinity) - (b.delay ?? Infinity));
     let best = results.find((item) => item.ok);
     let fallbackFrom = null;
@@ -203,15 +247,24 @@ async function apiHandler(req, res, url) {
         const region = regionFor(name);
         return region !== 'other' && region !== currentRegion;
       });
-      const fallbackResults = await mapLimit(alternatives, 6, (name) => measureNode(name, DEFAULT_TEST_URL, 5000));
+      const fallbackResults = await mapLimit(alternatives, 6, (name) => measureNodeStable(name, VERIFY_TEST_URL, 5000, 2));
       fallbackResults.sort((a, b) => (a.delay ?? Infinity) - (b.delay ?? Infinity));
       best = fallbackResults.find((item) => item.ok);
       results = fallbackResults;
     }
-    if (!best) return sendJson(res, 200, { skipped: true, reason: '所有可识别地区节点测速全部失败', group: group.name, region: currentRegion, fallbackFrom, results });
+    if (!best) { runtime.running = false; addHistory({ group: group.name, skipped: true, reason: '所有可识别地区节点测速全部失败', region: currentRegion }); return sendJson(res, 200, { skipped: true, reason: '所有可识别地区节点测速全部失败', group: group.name, region: currentRegion, fallbackFrom, results }); }
     const selectedRegion = regionFor(best.name);
-    if (group.now !== best.name) await controllerRequest(`/proxies/${encodeURIComponent(group.name)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify({ name: best.name }) });
-    return sendJson(res, 200, { skipped: false, region: selectedRegion, fallbackFrom, group: group.name, previous: group.now, active: best.name, best, switched: group.now !== best.name, success: results.filter((item) => item.ok).length, candidates: results.length });
+    const currentDelay = results.find((item) => item.name === group.now)?.delay ?? Infinity;
+    const improvement = currentDelay - best.delay;
+    const shouldSwitch = group.now !== best.name && (currentDelay === Infinity || improvement >= SWITCH_THRESHOLD_MS);
+    if (shouldSwitch && !runtime.monitorOnly) await controllerRequest(`/proxies/${encodeURIComponent(group.name)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify({ name: best.name }) });
+    const active = shouldSwitch && !runtime.monitorOnly ? best.name : group.now;
+    runtime.lastAuto.set(group.name, active);
+    runtime.running = false;
+    runtime.nextRunAt = new Date(Date.now() + 180000).toISOString();
+    const entry = { skipped: false, region: selectedRegion, fallbackFrom, group: group.name, previous: group.now, active, best, switched: shouldSwitch && !runtime.monitorOnly, success: results.filter((item) => item.ok).length, candidates: results.length, improvement };
+    addHistory(entry);
+    return sendJson(res, 200, entry);
   }
   sendJson(res, 404, { error: 'Not found' });
 }
