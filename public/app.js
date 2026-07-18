@@ -37,6 +37,17 @@ function updateButton() {
   $('optimizeButton').disabled = !state.group || !state.region || !state.status;
 }
 
+function renderAutomation(data) {
+  const automation = data.automation || {};
+  const lock = Math.ceil((automation.lockMs || 0) / 60000);
+  $('monitorOnly').checked = Boolean(automation.monitorOnly);
+  $('lockButton').textContent = lock ? `解除保护（${lock} 分钟）` : '锁定 15 分钟';
+  const next = automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleTimeString() : '等待下一轮';
+  $('automationStatus').textContent = lock ? `自动切换已暂停，剩余约 ${lock} 分钟 · 下次轮询 ${next}` : `自动轮询每 3 分钟运行 · 下次运行 ${next}`;
+  const history = (automation.history || []).slice(0, 5);
+  $('history').innerHTML = history.length ? history.map((item) => `<div class="history-item"><span><strong>${escapeHtml(item.group || '')}</strong> · ${escapeHtml(item.reason || (item.switched ? '已切换' : '保持当前'))}</span><span class="${item.skipped ? 'skip' : 'ok'}">${new Date(item.at).toLocaleTimeString()}</span></div>`).join('') : '';
+}
+
 async function loadStatus() {
   $('message').textContent = '正在同步 Clash Verge 状态...';
   $('message').className = 'message';
@@ -45,6 +56,7 @@ async function loadStatus() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
     state.status = data;
+    renderAutomation(data);
     if (!data.groups.some((group) => group.name === state.group)) {
       state.group = data.groups.find((group) => group.name === data.targetGroup)?.name || data.groups[0]?.name || '';
     }
@@ -118,4 +130,7 @@ $('groupSelect').addEventListener('change', (event) => { state.group = event.tar
 $('settingsButton').addEventListener('click', () => { $('advanced').hidden = !$('advanced').hidden; });
 $('refreshButton').addEventListener('click', loadStatus);
 $('optimizeButton').addEventListener('click', optimize);
+document.getElementById('monitorOnly').addEventListener('change', async (event) => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'monitor', value:event.target.checked }) }); loadStatus(); });
+document.getElementById('lockButton').addEventListener('click', async () => { const locked = document.getElementById('lockButton').textContent.includes('解除'); await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:locked ? 'unlock' : 'lock' }) }); loadStatus(); });
 loadStatus();
+setInterval(loadStatus, 15000);
