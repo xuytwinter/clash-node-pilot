@@ -23,7 +23,7 @@ const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
 const STATE_PATH = process.env.CLASH_PILOT_STATE || path.join(__dirname, 'data', 'state.json');
-const runtime = { running: false, startedAt: null, history: [], locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false };
+const runtime = { running: false, startedAt: null, history: [], locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, settings: { switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
 
 function loadRuntimeState() {
   try {
@@ -33,6 +33,7 @@ function loadRuntimeState() {
     runtime.nextRunAt = saved.nextRunAt || null;
     runtime.locks = new Map(Object.entries(saved.locks || {}).map(([key, value]) => [key, Number(value)]));
     runtime.lastAuto = new Map(Object.entries(saved.lastAuto || {}));
+    runtime.settings = { ...runtime.settings, ...(saved.settings || {}) };
   } catch { /* first run or invalid state starts cleanly */ }
 }
 
@@ -40,7 +41,7 @@ function persistRuntimeState() {
   try {
     fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const temporary = `${STATE_PATH}.tmp`;
-    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto) }, null, 2), 'utf8');
+    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings }, null, 2), 'utf8');
     fsSync.renameSync(temporary, STATE_PATH);
   } catch { /* state persistence must not stop proxy switching */ }
 }
@@ -207,7 +208,7 @@ async function apiHandler(req, res, url) {
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
       targetSource: (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
-      automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly) },
+      automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings },
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
   }
@@ -216,10 +217,15 @@ async function apiHandler(req, res, url) {
     const { groups } = await inventory();
     const group = await pickPrimaryGroup(groups);
     if (!group) return sendJson(res, 404, { error: 'No active selector group' });
-    if (body.action === 'lock') runtime.locks.set(group.name, Date.now() + MANUAL_PAUSE_MS);
+    if (body.action === 'lock') runtime.locks.set(group.name, Date.now() + runtime.settings.manualPauseMinutes * 60000);
     if (body.action === 'unlock') runtime.locks.delete(group.name);
     if (body.action === 'monitor') runtime.monitorOnly = Boolean(body.value);
     if (body.action === 'clear-history') runtime.history = [];
+    if (body.action === 'settings') runtime.settings = {
+      switchThresholdMs: Math.min(500, Math.max(0, Number(body.settings?.switchThresholdMs) || 25)),
+      samples: Math.min(5, Math.max(1, Number(body.settings?.samples) || 2)),
+      manualPauseMinutes: Math.min(1440, Math.max(1, Number(body.settings?.manualPauseMinutes) || 15))
+    };
     persistRuntimeState();
     return sendJson(res, 200, { lockMs: lockRemaining(group.name), monitorOnly: Boolean(runtime.monitorOnly) });
   }
@@ -260,16 +266,17 @@ async function apiHandler(req, res, url) {
     if (locked > 0) { runtime.running = false; addHistory({ group: group.name, skipped: true, reason: '手动保护中', lockMs: locked }); return sendJson(res, 200, { skipped: true, reason: '手动保护中', lockMs: locked, group: group.name }); }
     const previousAuto = runtime.lastAuto.get(group.name);
     if (previousAuto && previousAuto !== group.now) {
-      runtime.locks.set(group.name, Date.now() + MANUAL_PAUSE_MS);
+      const pauseMs = runtime.settings.manualPauseMinutes * 60000;
+      runtime.locks.set(group.name, Date.now() + pauseMs);
       persistRuntimeState();
       runtime.running = false;
-      addHistory({ group: group.name, skipped: true, reason: '检测到手动切换', lockMs: MANUAL_PAUSE_MS });
-      return sendJson(res, 200, { skipped: true, reason: '检测到手动切换，已暂停自动切换', lockMs: MANUAL_PAUSE_MS, group: group.name, active: group.now });
+      addHistory({ group: group.name, skipped: true, reason: '检测到手动切换', lockMs: pauseMs });
+      return sendJson(res, 200, { skipped: true, reason: '检测到手动切换，已暂停自动切换', lockMs: pauseMs, group: group.name, active: group.now });
     }
     const currentRegion = regionFor(group.now);
     if (currentRegion === 'other') { runtime.running = false; return sendJson(res, 200, { skipped: true, reason: '当前节点地区无法识别', group: group.name, current: group.now }); }
     const candidates = group.members.filter((name) => regionFor(name) === currentRegion);
-    let results = candidates.length ? await mapLimit(candidates, 6, (name) => measureNodeStable(name, DEFAULT_TEST_URL, 5000, 2)) : [];
+    let results = candidates.length ? await mapLimit(candidates, 6, (name) => measureNodeStable(name, DEFAULT_TEST_URL, 5000, runtime.settings.samples)) : [];
     results.sort((a, b) => (a.delay ?? Infinity) - (b.delay ?? Infinity));
     let best = results.find((item) => item.ok);
     let fallbackFrom = null;
@@ -279,7 +286,7 @@ async function apiHandler(req, res, url) {
         const region = regionFor(name);
         return region !== 'other' && region !== currentRegion;
       });
-      const fallbackResults = await mapLimit(alternatives, 6, (name) => measureNodeStable(name, VERIFY_TEST_URL, 5000, 2));
+      const fallbackResults = await mapLimit(alternatives, 6, (name) => measureNodeStable(name, VERIFY_TEST_URL, 5000, runtime.settings.samples));
       fallbackResults.sort((a, b) => (a.delay ?? Infinity) - (b.delay ?? Infinity));
       best = fallbackResults.find((item) => item.ok);
       results = fallbackResults;
@@ -288,7 +295,7 @@ async function apiHandler(req, res, url) {
     const selectedRegion = regionFor(best.name);
     const currentDelay = results.find((item) => item.name === group.now)?.delay ?? Infinity;
     const improvement = currentDelay - best.delay;
-    const shouldSwitch = group.now !== best.name && (currentDelay === Infinity || improvement >= SWITCH_THRESHOLD_MS);
+    const shouldSwitch = group.now !== best.name && (currentDelay === Infinity || improvement >= runtime.settings.switchThresholdMs);
     if (shouldSwitch && !runtime.monitorOnly) await controllerRequest(`/proxies/${encodeURIComponent(group.name)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify({ name: best.name }) });
     const active = shouldSwitch && !runtime.monitorOnly ? best.name : group.now;
     runtime.lastAuto.set(group.name, active);

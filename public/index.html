@@ -34,6 +34,10 @@
         <div id="advanced" class="advanced" hidden>
           <label for="testUrl">测速地址</label><input id="testUrl" type="url">
           <label for="timeout">超时（毫秒）</label><input id="timeout" type="number" min="1000" max="10000" step="500">
+          <label for="switchThreshold">自动切换最低改善（毫秒）</label><input id="switchThreshold" type="number" min="0" max="500" step="5">
+          <label for="samples">自动测速采样次数</label><input id="samples" type="number" min="1" max="5">
+          <label for="pauseMinutes">手动操作保护（分钟）</label><input id="pauseMinutes" type="number" min="1" max="1440">
+          <button id="saveSettings" class="text-button" type="button">保存自动设置</button>
         </div>
         <button id="optimizeButton" class="primary" disabled><span class="bolt">⚡</span><span>开始测速并优选</span></button>
         <p id="message" class="message" aria-live="polite"></p>

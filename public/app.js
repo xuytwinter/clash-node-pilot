@@ -41,6 +41,11 @@ function renderAutomation(data) {
   const automation = data.automation || {};
   const lock = Math.ceil((automation.lockMs || 0) / 60000);
   $('monitorOnly').checked = Boolean(automation.monitorOnly);
+  if ($('advanced').hidden) {
+    $('switchThreshold').value = automation.settings?.switchThresholdMs ?? 25;
+    $('samples').value = automation.settings?.samples ?? 2;
+    $('pauseMinutes').value = automation.settings?.manualPauseMinutes ?? 15;
+  }
   $('lockButton').textContent = lock ? `解除保护（${lock} 分钟）` : '锁定 15 分钟';
   const next = automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleTimeString() : '等待下一轮';
   $('automationStatus').textContent = lock ? `自动切换已暂停，剩余约 ${lock} 分钟 · 下次轮询 ${next}` : `自动轮询每 3 分钟运行 · 下次运行 ${next}`;
@@ -132,5 +137,6 @@ $('refreshButton').addEventListener('click', loadStatus);
 $('optimizeButton').addEventListener('click', optimize);
 document.getElementById('monitorOnly').addEventListener('change', async (event) => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'monitor', value:event.target.checked }) }); loadStatus(); });
 document.getElementById('lockButton').addEventListener('click', async () => { const locked = document.getElementById('lockButton').textContent.includes('解除'); await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:locked ? 'unlock' : 'lock' }) }); loadStatus(); });
+document.getElementById('saveSettings').addEventListener('click', async () => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'settings', settings:{ switchThresholdMs:Number($('switchThreshold').value), samples:Number($('samples').value), manualPauseMinutes:Number($('pauseMinutes').value) } }) }); $('message').textContent='自动设置已保存。'; loadStatus(); });
 loadStatus();
 setInterval(loadStatus, 15000);
