@@ -10,3 +10,5 @@
 - Persisted history, settings, manual locks, and node health across service restarts.
 - Added configurable sampling, switch threshold, and manual-protection settings.
 - Added persistent failure-rate health scoring and recent latency visualization.
+- Added automatic discovery and selection of Clash Verge, Clash for Windows, and custom Clash/Mihomo controllers.
+- Added safe read-only v2rayN 7.x detection for the current node, historical delay, and inventory size.

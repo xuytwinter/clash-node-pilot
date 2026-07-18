@@ -25,6 +25,17 @@ A local node optimizer for Clash Verge Rev and Mihomo. It follows the proxy grou
 - Clash Verge Rev with the Mihomo core running
 - Node.js 18 or newer
 
+## Client support
+
+| Client | Detection | Benchmark and switch | Notes |
+| --- | --- | --- | --- |
+| Clash Verge Rev | Yes | Full | Follows the proxy group selected in the Clash Verge UI |
+| Clash for Windows | Yes | Full | Uses the standard Clash Controller API when CFW is running |
+| Other Clash/Mihomo clients | Yes | Full | Set `CLASH_CONFIG` to the runtime configuration path |
+| v2rayN 7.x | Yes | Read-only | Shows the current node, historical delay, and node count |
+
+v2rayN does not expose an external node-management API. Its supported switch path calls an internal GUI `Reload()` method after saving `IndexId`; editing the JSON file from another process does not reload the running Xray core. Clash Node Pilot therefore does not force-restart v2rayN or write its database. Full v2rayN switching requires an upstream-supported IPC/API or a dedicated in-process bridge.
+
 ## Quick Start
 
 ```powershell

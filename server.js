@@ -115,7 +115,7 @@ function detectV2rayN() {
   try {
     const configPath = path.join(home, 'guiConfigs', 'guiNConfig.json');
     const config = JSON.parse(fsSync.readFileSync(configPath, 'utf8'));
-    const result = { id: 'v2rayn', name: 'v2rayN', online: true, writable: false, mode: 'read-only', currentId: config.IndexId || null, groupId: config.SubIndexId || null };
+    const result = { id: 'v2rayn', name: 'v2rayN', online: true, writable: false, mode: 'read-only' };
     try {
       const { DatabaseSync } = require('node:sqlite');
       const database = new DatabaseSync(path.join(home, 'guiConfigs', 'guiNDB.db'), { readOnly: true });
