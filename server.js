@@ -23,12 +23,13 @@ const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
 const STATE_PATH = process.env.CLASH_PILOT_STATE || path.join(__dirname, 'data', 'state.json');
-const runtime = { running: false, startedAt: null, history: [], locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, settings: { switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
+const runtime = { running: false, startedAt: null, history: [], health: {}, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, settings: { switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
 
 function loadRuntimeState() {
   try {
     const saved = JSON.parse(fsSync.readFileSync(STATE_PATH, 'utf8'));
     runtime.history = Array.isArray(saved.history) ? saved.history.slice(0, 100) : [];
+    runtime.health = saved.health && typeof saved.health === 'object' ? saved.health : {};
     runtime.monitorOnly = Boolean(saved.monitorOnly);
     runtime.nextRunAt = saved.nextRunAt || null;
     runtime.locks = new Map(Object.entries(saved.locks || {}).map(([key, value]) => [key, Number(value)]));
@@ -41,7 +42,7 @@ function persistRuntimeState() {
   try {
     fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const temporary = `${STATE_PATH}.tmp`;
-    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings }, null, 2), 'utf8');
+    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings }, null, 2), 'utf8');
     fsSync.renameSync(temporary, STATE_PATH);
   } catch { /* state persistence must not stop proxy switching */ }
 }
@@ -172,6 +173,26 @@ function lockRemaining(group) {
   return Math.max(0, (runtime.locks.get(group) || 0) - Date.now());
 }
 
+function updateHealth(results) {
+  for (const result of results) {
+    const health = runtime.health[result.name] || { success: 0, failure: 0, latencies: [] };
+    if (result.ok) {
+      health.success++;
+      health.latencies.unshift(result.delay);
+      health.latencies = health.latencies.slice(0, 20);
+    } else health.failure++;
+    health.updatedAt = new Date().toISOString();
+    runtime.health[result.name] = health;
+  }
+}
+
+function healthScore(result) {
+  const health = runtime.health[result.name] || { success: 0, failure: 0 };
+  const total = health.success + health.failure;
+  const failureRate = total ? health.failure / total : 0;
+  return result.delay + failureRate * 200;
+}
+
 async function mapLimit(items, limit, mapper) {
   const results = new Array(items.length);
   let cursor = 0;
@@ -208,7 +229,7 @@ async function apiHandler(req, res, url) {
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
       targetSource: (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
-      automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings },
+      automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
   }
@@ -277,7 +298,8 @@ async function apiHandler(req, res, url) {
     if (currentRegion === 'other') { runtime.running = false; return sendJson(res, 200, { skipped: true, reason: '当前节点地区无法识别', group: group.name, current: group.now }); }
     const candidates = group.members.filter((name) => regionFor(name) === currentRegion);
     let results = candidates.length ? await mapLimit(candidates, 6, (name) => measureNodeStable(name, DEFAULT_TEST_URL, 5000, runtime.settings.samples)) : [];
-    results.sort((a, b) => (a.delay ?? Infinity) - (b.delay ?? Infinity));
+    updateHealth(results);
+    results.sort((a, b) => (a.ok ? healthScore(a) : Infinity) - (b.ok ? healthScore(b) : Infinity));
     let best = results.find((item) => item.ok);
     let fallbackFrom = null;
     if (!best) {
@@ -287,7 +309,8 @@ async function apiHandler(req, res, url) {
         return region !== 'other' && region !== currentRegion;
       });
       const fallbackResults = await mapLimit(alternatives, 6, (name) => measureNodeStable(name, VERIFY_TEST_URL, 5000, runtime.settings.samples));
-      fallbackResults.sort((a, b) => (a.delay ?? Infinity) - (b.delay ?? Infinity));
+      updateHealth(fallbackResults);
+      fallbackResults.sort((a, b) => (a.ok ? healthScore(a) : Infinity) - (b.ok ? healthScore(b) : Infinity));
       best = fallbackResults.find((item) => item.ok);
       results = fallbackResults;
     }
@@ -302,7 +325,7 @@ async function apiHandler(req, res, url) {
     runtime.running = false;
     runtime.nextRunAt = new Date(Date.now() + 180000).toISOString();
     persistRuntimeState();
-    const entry = { skipped: false, region: selectedRegion, fallbackFrom, group: group.name, previous: group.now, active, best, switched: shouldSwitch && !runtime.monitorOnly, success: results.filter((item) => item.ok).length, candidates: results.length, improvement };
+    const entry = { skipped: false, region: selectedRegion, fallbackFrom, group: group.name, previous: group.now, active, best, switched: shouldSwitch && !runtime.monitorOnly, success: results.filter((item) => item.ok).length, candidates: results.length, improvement, score: Math.round(healthScore(best)) };
     addHistory(entry);
     return sendJson(res, 200, entry);
   }
