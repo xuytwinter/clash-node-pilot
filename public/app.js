@@ -49,10 +49,9 @@ function renderAutomation(data) {
   $('lockButton').textContent = lock ? `解除保护（${lock} 分钟）` : '锁定 15 分钟';
   const next = automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleTimeString() : '等待下一轮';
   $('automationStatus').textContent = lock ? `自动切换已暂停，剩余约 ${lock} 分钟 · 下次轮询 ${next}` : `自动轮询每 3 分钟运行 · 跟踪 ${automation.trackedNodes || 0} 个节点 · 下次运行 ${next}`;
-  const history = (automation.history || []).slice(0, 5);
-  $('history').innerHTML = history.length ? history.map((item) => `<div class="history-item"><span><strong>${escapeHtml(item.group || '')}</strong> · ${escapeHtml(item.reason || (item.switched ? '已切换' : '保持当前'))}</span><span class="${item.skipped ? 'skip' : 'ok'}">${new Date(item.at).toLocaleTimeString()}</span></div>`).join('') : '';
   const trend = (automation.history || []).filter((item) => item.best?.delay).slice(0, 20).reverse();
   const maxDelay = Math.max(1, ...trend.map((item) => item.best.delay));
+  $('trendHeading').hidden = !trend.length;
   $('trend').innerHTML = trend.map((item) => `<div class="trend-bar ${item.switched ? 'switched' : ''}" style="--height:${Math.max(10, Math.round(item.best.delay / maxDelay * 100))}%" data-label="${item.best.delay} ms · ${new Date(item.at).toLocaleTimeString()}"></div>`).join('');
 }
 
