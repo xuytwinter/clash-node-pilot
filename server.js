@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { execFileSync } = require('node:child_process');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 3210);
@@ -97,6 +98,35 @@ async function probeBackend(backend) {
 
 async function discoverBackends() {
   return Promise.all(MIHOMO_BACKENDS.map(probeBackend));
+}
+
+function discoverV2rayNHome() {
+  if (process.env.V2RAYN_HOME && fsSync.existsSync(path.join(process.env.V2RAYN_HOME, 'v2rayN.exe'))) return process.env.V2RAYN_HOME;
+  if (process.platform !== 'win32') return null;
+  try {
+    const executable = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(Get-Process v2rayN -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path)'], { encoding: 'utf8', timeout: 2000, windowsHide: true }).trim();
+    return executable ? path.dirname(executable) : null;
+  } catch { return null; }
+}
+
+function detectV2rayN() {
+  const home = discoverV2rayNHome();
+  if (!home) return { id: 'v2rayn', name: 'v2rayN', online: false, writable: false };
+  try {
+    const configPath = path.join(home, 'guiConfigs', 'guiNConfig.json');
+    const config = JSON.parse(fsSync.readFileSync(configPath, 'utf8'));
+    const result = { id: 'v2rayn', name: 'v2rayN', online: true, writable: false, mode: 'read-only', currentId: config.IndexId || null, groupId: config.SubIndexId || null };
+    try {
+      const { DatabaseSync } = require('node:sqlite');
+      const database = new DatabaseSync(path.join(home, 'guiConfigs', 'guiNDB.db'), { readOnly: true });
+      const current = database.prepare('select p.Remarks as name, p.Subid as groupId, coalesce(e.Delay,0) as delay from ProfileItem p left join ProfileExItem e on e.IndexId=p.IndexId where p.IndexId=?').get(config.IndexId);
+      const count = database.prepare('select count(*) as count from ProfileItem').get().count;
+      database.close();
+      result.current = current ? { name: current.name, delay: current.delay } : null;
+      result.nodeCount = count;
+    } catch { result.current = null; }
+    return result;
+  } catch { return { id: 'v2rayn', name: 'v2rayN', online: true, writable: false, mode: 'read-only', error: 'Configuration could not be read' }; }
 }
 
 async function activeBackend() {
@@ -257,10 +287,12 @@ async function apiHandler(req, res, url) {
     const { groups, backend } = await inventory();
     const targetGroup = await pickPrimaryGroup(groups, backend);
     const discovered = await discoverBackends();
+    const v2rayN = detectV2rayN();
     return sendJson(res, 200, {
       connected: true,
       backend: { id: backend.id, name: backend.name, version: backend.version },
       backends: discovered.map(({ id, name, online, version }) => ({ id, name, online, version })),
+      detectedClients: [...discovered.map(({ id, name, online, version }) => ({ id, name, online, version, writable: true })), v2rayN],
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
       targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',

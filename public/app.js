@@ -67,6 +67,8 @@ async function loadStatus() {
     renderAutomation(data);
     $('backendSelect').innerHTML = (data.backends || []).map((backend) => `<option value="${escapeHtml(backend.id)}" ${backend.online ? '' : 'disabled'}>${escapeHtml(backend.name)} · ${backend.online ? `在线 ${escapeHtml(backend.version || '')}` : '离线'}</option>`).join('');
     $('backendSelect').value = data.backend?.id || '';
+    const v2rayN = (data.detectedClients || []).find((client) => client.id === 'v2rayn');
+    $('clientInfo').textContent = v2rayN?.online ? `v2rayN 已检测：${v2rayN.current?.name || '当前节点未知'}${v2rayN.current?.delay ? ` · 历史延迟 ${v2rayN.current.delay} ms` : ''} · 只读` : 'v2rayN 未运行';
     if (!data.groups.some((group) => group.name === state.group)) {
       state.group = data.groups.find((group) => group.name === data.targetGroup)?.name || data.groups[0]?.name || '';
     }
