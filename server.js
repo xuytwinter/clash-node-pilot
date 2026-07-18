@@ -270,6 +270,14 @@ async function apiHandler(req, res, url) {
   }
   if (req.method === 'POST' && url.pathname === '/api/automation') {
     const body = await readJson(req);
+    if (body.action === 'backend') {
+      const available = await discoverBackends();
+      const selected = available.find((item) => item.id === body.value && item.online);
+      if (!selected) return sendJson(res, 400, { error: 'Selected backend is offline or unavailable' });
+      runtime.selectedBackend = selected.id;
+      persistRuntimeState();
+      return sendJson(res, 200, { backend: { id: selected.id, name: selected.name, version: selected.version } });
+    }
     const { groups, backend } = await inventory();
     const group = await pickPrimaryGroup(groups, backend);
     if (!group) return sendJson(res, 404, { error: 'No active selector group' });
@@ -282,7 +290,6 @@ async function apiHandler(req, res, url) {
       samples: Math.min(5, Math.max(1, Number(body.settings?.samples) || 2)),
       manualPauseMinutes: Math.min(1440, Math.max(1, Number(body.settings?.manualPauseMinutes) || 15))
     };
-    if (body.action === 'backend') runtime.selectedBackend = String(body.value || '');
     persistRuntimeState();
     return sendJson(res, 200, { lockMs: lockRemaining(group.name), monitorOnly: Boolean(runtime.monitorOnly) });
   }

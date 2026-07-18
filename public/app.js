@@ -65,6 +65,8 @@ async function loadStatus() {
     if (!response.ok) throw new Error(data.error);
     state.status = data;
     renderAutomation(data);
+    $('backendSelect').innerHTML = (data.backends || []).map((backend) => `<option value="${escapeHtml(backend.id)}" ${backend.online ? '' : 'disabled'}>${escapeHtml(backend.name)} · ${backend.online ? `在线 ${escapeHtml(backend.version || '')}` : '离线'}</option>`).join('');
+    $('backendSelect').value = data.backend?.id || '';
     if (!data.groups.some((group) => group.name === state.group)) {
       state.group = data.groups.find((group) => group.name === data.targetGroup)?.name || data.groups[0]?.name || '';
     }
@@ -135,6 +137,7 @@ async function optimize() {
 }
 
 $('groupSelect').addEventListener('change', (event) => { state.group = event.target.value; state.region = ''; renderRegions(); });
+$('backendSelect').addEventListener('change', async (event) => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'backend', value:event.target.value }) }); state.group=''; state.region=''; loadStatus(); });
 $('settingsButton').addEventListener('click', () => { $('advanced').hidden = !$('advanced').hidden; });
 $('refreshButton').addEventListener('click', loadStatus);
 $('optimizeButton').addEventListener('click', optimize);
