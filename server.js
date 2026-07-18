@@ -7,11 +7,17 @@ const os = require('node:os');
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 3210);
 const STATIC_ROOT = path.join(__dirname, 'public');
-const CONFIG_PATH = process.env.CLASH_CONFIG || path.join(
+const VERGE_CONFIG_PATH = path.join(
   process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
   'io.github.clash-verge-rev.clash-verge-rev',
   'config.yaml'
 );
+const CFW_CONFIG_PATH = path.join(os.homedir(), '.config', 'clash', 'config.yaml');
+const MIHOMO_BACKENDS = [
+  ...(process.env.CLASH_CONFIG ? [{ id: 'custom', name: 'Custom Clash/Mihomo', configPath: process.env.CLASH_CONFIG }] : []),
+  { id: 'clash-verge', name: 'Clash Verge Rev', configPath: VERGE_CONFIG_PATH },
+  { id: 'clash-for-windows', name: 'Clash for Windows', configPath: CFW_CONFIG_PATH }
+];
 const WEBVIEW_LEVELDB = path.join(
   process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
   'io.github.clash-verge-rev.clash-verge-rev', 'EBWebView', 'Default', 'Local Storage', 'leveldb'
@@ -23,7 +29,7 @@ const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
 const STATE_PATH = process.env.CLASH_PILOT_STATE || path.join(__dirname, 'data', 'state.json');
-const runtime = { running: false, startedAt: null, history: [], health: {}, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, settings: { switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
+const runtime = { running: false, startedAt: null, history: [], health: {}, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, settings: { switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
 
 function loadRuntimeState() {
   try {
@@ -35,6 +41,7 @@ function loadRuntimeState() {
     runtime.locks = new Map(Object.entries(saved.locks || {}).map(([key, value]) => [key, Number(value)]));
     runtime.lastAuto = new Map(Object.entries(saved.lastAuto || {}));
     runtime.settings = { ...runtime.settings, ...(saved.settings || {}) };
+    runtime.selectedBackend = saved.selectedBackend || null;
   } catch { /* first run or invalid state starts cleanly */ }
 }
 
@@ -42,7 +49,7 @@ function persistRuntimeState() {
   try {
     fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const temporary = `${STATE_PATH}.tmp`;
-    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings }, null, 2), 'utf8');
+    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings, selectedBackend: runtime.selectedBackend }, null, 2), 'utf8');
     fsSync.renameSync(temporary, STATE_PATH);
   } catch { /* state persistence must not stop proxy switching */ }
 }
@@ -76,8 +83,31 @@ function regionFor(name) {
   return REGIONS.find((region) => region.pattern.test(name))?.id || 'other';
 }
 
+async function probeBackend(backend) {
+  try {
+    const config = parseConfig(await fs.readFile(backend.configPath, 'utf8'));
+    const controller = /^https?:\/\//i.test(config.controller) ? config.controller : `http://${config.controller}`;
+    const headers = config.secret ? { Authorization: `Bearer ${config.secret}` } : {};
+    const response = await fetch(`${controller}/version`, { headers, signal: AbortSignal.timeout(1800) });
+    if (!response.ok) return { ...backend, online: false };
+    const version = await response.json().catch(() => ({}));
+    return { ...backend, online: true, version: version.version || version.meta || 'unknown', config };
+  } catch { return { ...backend, online: false }; }
+}
+
+async function discoverBackends() {
+  return Promise.all(MIHOMO_BACKENDS.map(probeBackend));
+}
+
+async function activeBackend() {
+  const backends = await discoverBackends();
+  return backends.find((item) => item.online && item.id === runtime.selectedBackend) || backends.find((item) => item.online) || null;
+}
+
 async function controllerRequest(route, options = {}) {
-  const config = parseConfig(await fs.readFile(CONFIG_PATH, 'utf8'));
+  const backend = await activeBackend();
+  if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
+  const config = backend.config;
   const controller = /^https?:\/\//i.test(config.controller) ? config.controller : `http://${config.controller}`;
   const headers = { Accept: 'application/json', ...options.headers };
   if (config.secret) headers.Authorization = `Bearer ${config.secret}`;
@@ -88,6 +118,8 @@ async function controllerRequest(route, options = {}) {
 }
 
 async function inventory() {
+  const backend = await activeBackend();
+  if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
   const payload = await controllerRequest('/proxies');
   const entries = Object.entries(payload.proxies || {});
   const proxies = new Map(entries);
@@ -102,7 +134,7 @@ async function inventory() {
       })
     }))
     .filter((group) => group.members.length > 0);
-  return { proxies, groups };
+  return { proxies, groups, backend };
 }
 
 async function selectedUiGroup(groups) {
@@ -126,8 +158,8 @@ function detectSelectedGroupFromBuffer(data, groups) {
   return groups.find((group) => record.includes(Buffer.from(group.name, 'utf16le')))?.name || null;
 }
 
-async function pickPrimaryGroup(groups) {
-  const selected = await selectedUiGroup(groups);
+async function pickPrimaryGroup(groups, backend) {
+  const selected = backend?.id === 'clash-verge' ? await selectedUiGroup(groups) : null;
   return groups.find((group) => group.name === selected)
     || groups.find((group) => group.name === TARGET_GROUP)
     || groups.find((group) => /漏网之鱼|final|match/i.test(group.name))
@@ -222,21 +254,24 @@ function sendJson(res, status, data) {
 
 async function apiHandler(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/status') {
-    const { groups } = await inventory();
-    const targetGroup = await pickPrimaryGroup(groups);
+    const { groups, backend } = await inventory();
+    const targetGroup = await pickPrimaryGroup(groups, backend);
+    const discovered = await discoverBackends();
     return sendJson(res, 200, {
       connected: true,
+      backend: { id: backend.id, name: backend.name, version: backend.version },
+      backends: discovered.map(({ id, name, online, version }) => ({ id, name, online, version })),
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
-      targetSource: (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
+      targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
       automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
   }
   if (req.method === 'POST' && url.pathname === '/api/automation') {
     const body = await readJson(req);
-    const { groups } = await inventory();
-    const group = await pickPrimaryGroup(groups);
+    const { groups, backend } = await inventory();
+    const group = await pickPrimaryGroup(groups, backend);
     if (!group) return sendJson(res, 404, { error: 'No active selector group' });
     if (body.action === 'lock') runtime.locks.set(group.name, Date.now() + runtime.settings.manualPauseMinutes * 60000);
     if (body.action === 'unlock') runtime.locks.delete(group.name);
@@ -247,6 +282,7 @@ async function apiHandler(req, res, url) {
       samples: Math.min(5, Math.max(1, Number(body.settings?.samples) || 2)),
       manualPauseMinutes: Math.min(1440, Math.max(1, Number(body.settings?.manualPauseMinutes) || 15))
     };
+    if (body.action === 'backend') runtime.selectedBackend = String(body.value || '');
     persistRuntimeState();
     return sendJson(res, 200, { lockMs: lockRemaining(group.name), monitorOnly: Boolean(runtime.monitorOnly) });
   }
@@ -280,8 +316,8 @@ async function apiHandler(req, res, url) {
     if (runtime.running) return sendJson(res, 409, { skipped: true, reason: '已有优选任务正在运行' });
     runtime.running = true;
     runtime.startedAt = new Date().toISOString();
-    const { groups } = await inventory();
-    const group = await pickPrimaryGroup(groups);
+    const { groups, backend } = await inventory();
+    const group = await pickPrimaryGroup(groups, backend);
     if (!group) { runtime.running = false; return sendJson(res, 404, { skipped: true, reason: '没有可用的手动代理组' }); }
     const locked = lockRemaining(group.name);
     if (locked > 0) { runtime.running = false; addHistory({ group: group.name, skipped: true, reason: '手动保护中', lockMs: locked }); return sendJson(res, 200, { skipped: true, reason: '手动保护中', lockMs: locked, group: group.name }); }
