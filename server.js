@@ -1,5 +1,6 @@
 const http = require('node:http');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
@@ -23,7 +24,7 @@ const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 10
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
 const runtime = { running: false, startedAt: null, history: [], locks: new Map(), lastAuto: new Map(), nextRunAt: null };
 
-const REGIONS = [
+let REGIONS = [
   { id: 'jp', label: '日本', flag: '🇯🇵', pattern: /🇯🇵|日本|东京|東京|大阪|名古屋|jp\b|japan|tokyo|osaka/i },
   { id: 'hk', label: '香港', flag: '🇭🇰', pattern: /🇭🇰|香港|港(?!口)|hk\b|hong\s*kong/i },
   { id: 'tw', label: '台湾', flag: '🇹🇼', pattern: /🇹🇼|台湾|臺灣|台北|臺北|高雄|tw\b|taiwan|taipei/i },
@@ -33,6 +34,10 @@ const REGIONS = [
   { id: 'de', label: '德国', flag: '🇩🇪', pattern: /🇩🇪|德国|德國|法兰克福|法蘭克福|de\b|germany|frankfurt/i },
   { id: 'uk', label: '英国', flag: '🇬🇧', pattern: /🇬🇧|英国|英國|伦敦|倫敦|uk\b|britain|london/i }
 ];
+try {
+  const customRegions = JSON.parse(fsSync.readFileSync(path.join(__dirname, 'regions.json'), 'utf8'));
+  REGIONS = REGIONS.map((region) => ({ ...region, pattern: customRegions[region.id] ? new RegExp(customRegions[region.id].join('|'), 'i') : region.pattern }));
+} catch { /* bundled defaults remain active */ }
 
 function parseConfig(text) {
   const value = (key) => {
@@ -78,7 +83,7 @@ async function inventory() {
 async function selectedUiGroup(groups) {
   try {
     const files = (await fs.readdir(WEBVIEW_LEVELDB, { withFileTypes: true }))
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.log'));
+      .filter((entry) => entry.isFile() && (entry.name.endsWith('.log') || entry.name.endsWith('.ldb')));
     const ranked = await Promise.all(files.map(async (entry) => ({ name: entry.name, mtime: (await fs.stat(path.join(WEBVIEW_LEVELDB, entry.name))).mtimeMs })));
     ranked.sort((a, b) => b.mtime - a.mtime);
     const data = await fs.readFile(path.join(WEBVIEW_LEVELDB, ranked[0].name));
