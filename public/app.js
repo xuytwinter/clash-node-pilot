@@ -1,4 +1,4 @@
-const state = { status: null, group: '', region: '' };
+const state = { status: null, group: '', region: '', resultsSource: null };
 const $ = (id) => document.getElementById(id);
 
 function setConnection(connected, text) {
@@ -41,7 +41,7 @@ function renderAutomation(data) {
   const automation = data.automation || {};
   const lock = Math.ceil((automation.lockMs || 0) / 60000);
   $('monitorOnly').checked = Boolean(automation.monitorOnly);
-  if ($('advanced').hidden) {
+  if (!$('settingsDialog').open) {
     $('switchThreshold').value = automation.settings?.switchThresholdMs ?? 25;
     $('samples').value = automation.settings?.samples ?? 2;
     $('pauseMinutes').value = automation.settings?.manualPauseMinutes ?? 15;
@@ -53,6 +53,15 @@ function renderAutomation(data) {
   const maxDelay = Math.max(1, ...trend.map((item) => item.best.delay));
   $('trendHeading').hidden = !trend.length;
   $('trend').innerHTML = trend.map((item) => `<div class="trend-bar ${item.switched ? 'switched' : ''}" style="--height:${Math.max(10, Math.round(item.best.delay / maxDelay * 100))}%" data-label="${item.best.delay} ms · ${new Date(item.at).toLocaleTimeString()}"></div>`).join('');
+}
+
+function renderPersistedResults(data) {
+  const saved = data.automation?.lastResults;
+  if (!saved?.results?.length || state.resultsSource === 'manual') return;
+  if (saved.backend && saved.backend !== data.backend?.id) return;
+  if (saved.group !== state.group) return;
+  renderResults(saved, { source:'automatic', at:saved.at });
+  state.resultsSource = 'automatic';
 }
 
 async function loadStatus() {
@@ -73,6 +82,7 @@ async function loadStatus() {
     }
     $('groupSelect').innerHTML = data.groups.map((group) => `<option value="${escapeHtml(group.name)}">${escapeHtml(group.name)} · ${group.nodeCount} 节点</option>`).join('');
     $('groupSelect').value = state.group;
+    renderPersistedResults(data);
     $('testUrl').value ||= data.defaults.testUrl;
     $('timeout').value ||= data.defaults.timeout;
     setConnection(true, 'Mihomo 已连接');
@@ -93,10 +103,11 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[char]);
 }
 
-function renderResults(data) {
+function renderResults(data, meta = {}) {
   $('empty').style.display = 'none';
   $('results').className = 'results visible';
-  $('resultCount').textContent = `${data.results.length} 个节点`;
+  const time = meta.at ? new Date(meta.at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '';
+  $('resultCount').textContent = meta.source === 'automatic' ? `自动测速 · ${time} · ${data.results.length} 节点` : `本次测速 · ${data.results.length} 节点`;
   $('results').innerHTML = data.results.map((item, index) => {
     const active = item.name === data.active;
     const delayClass = !item.ok ? 'failed' : item.delay > 500 ? 'slow' : '';
@@ -122,7 +133,8 @@ async function optimize() {
       if (data.results) renderResults({ ...data, active: selectedGroup()?.now });
       throw new Error(data.error);
     }
-    renderResults(data);
+    renderResults(data, { source:'manual' });
+    state.resultsSource = 'manual';
     const group = selectedGroup();
     if (group) group.now = data.active;
     updateCurrent();
@@ -137,13 +149,15 @@ async function optimize() {
   }
 }
 
-$('groupSelect').addEventListener('change', (event) => { state.group = event.target.value; state.region = ''; renderRegions(); });
+$('groupSelect').addEventListener('change', (event) => { state.group = event.target.value; state.region = ''; state.resultsSource=null; $('results').className='results'; $('empty').style.display='flex'; $('resultCount').textContent='等待自动测速'; renderRegions(); renderPersistedResults(state.status); });
 $('backendSelect').addEventListener('change', async (event) => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'backend', value:event.target.value }) }); state.group=''; state.region=''; loadStatus(); });
-$('settingsButton').addEventListener('click', () => { $('advanced').hidden = !$('advanced').hidden; });
+$('settingsButton').addEventListener('click', () => $('settingsDialog').showModal());
+$('closeSettings').addEventListener('click', () => $('settingsDialog').close());
+$('cancelSettings').addEventListener('click', () => $('settingsDialog').close());
 $('refreshButton').addEventListener('click', loadStatus);
 $('optimizeButton').addEventListener('click', optimize);
 document.getElementById('monitorOnly').addEventListener('change', async (event) => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'monitor', value:event.target.checked }) }); loadStatus(); });
 document.getElementById('lockButton').addEventListener('click', async () => { const locked = document.getElementById('lockButton').textContent.includes('解除'); await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:locked ? 'unlock' : 'lock' }) }); loadStatus(); });
-document.getElementById('saveSettings').addEventListener('click', async () => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'settings', settings:{ switchThresholdMs:Number($('switchThreshold').value), samples:Number($('samples').value), manualPauseMinutes:Number($('pauseMinutes').value) } }) }); $('message').textContent='自动设置已保存。'; loadStatus(); });
+document.getElementById('saveSettings').addEventListener('click', async () => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'settings', settings:{ switchThresholdMs:Number($('switchThreshold').value), samples:Number($('samples').value), manualPauseMinutes:Number($('pauseMinutes').value) } }) }); $('settingsDialog').close(); $('message').textContent='自动设置已保存。'; loadStatus(); });
 loadStatus();
 setInterval(loadStatus, 15000);

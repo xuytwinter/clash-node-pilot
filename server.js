@@ -30,13 +30,14 @@ const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
 const STATE_PATH = process.env.CLASH_PILOT_STATE || path.join(__dirname, 'data', 'state.json');
-const runtime = { running: false, startedAt: null, history: [], health: {}, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, settings: { switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
+const runtime = { running: false, startedAt: null, history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, settings: { switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
 
 function loadRuntimeState() {
   try {
     const saved = JSON.parse(fsSync.readFileSync(STATE_PATH, 'utf8'));
     runtime.history = Array.isArray(saved.history) ? saved.history.slice(0, 100) : [];
     runtime.health = saved.health && typeof saved.health === 'object' ? saved.health : {};
+    runtime.lastResults = saved.lastResults || null;
     runtime.monitorOnly = Boolean(saved.monitorOnly);
     runtime.nextRunAt = saved.nextRunAt || null;
     runtime.locks = new Map(Object.entries(saved.locks || {}).map(([key, value]) => [key, Number(value)]));
@@ -50,7 +51,7 @@ function persistRuntimeState() {
   try {
     fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const temporary = `${STATE_PATH}.tmp`;
-    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings, selectedBackend: runtime.selectedBackend }, null, 2), 'utf8');
+    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, lastResults: runtime.lastResults, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings, selectedBackend: runtime.selectedBackend }, null, 2), 'utf8');
     fsSync.renameSync(temporary, STATE_PATH);
   } catch { /* state persistence must not stop proxy switching */ }
 }
@@ -296,7 +297,7 @@ async function apiHandler(req, res, url) {
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
       targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
-      automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
+      automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
   }
@@ -314,7 +315,7 @@ async function apiHandler(req, res, url) {
     const group = await pickPrimaryGroup(groups, backend);
     if (!group) return sendJson(res, 404, { error: 'No active selector group' });
     if (body.action === 'lock') runtime.locks.set(group.name, Date.now() + runtime.settings.manualPauseMinutes * 60000);
-    if (body.action === 'unlock') runtime.locks.delete(group.name);
+    if (body.action === 'unlock') { runtime.locks.delete(group.name); runtime.lastAuto.delete(group.name); }
     if (body.action === 'monitor') runtime.monitorOnly = Boolean(body.value);
     if (body.action === 'clear-history') runtime.history = [];
     if (body.action === 'settings') runtime.settings = {
@@ -401,6 +402,7 @@ async function apiHandler(req, res, url) {
     runtime.nextRunAt = new Date(Date.now() + 180000).toISOString();
     persistRuntimeState();
     const entry = { skipped: false, region: selectedRegion, fallbackFrom, group: group.name, previous: group.now, active, best, switched: shouldSwitch && !runtime.monitorOnly, success: results.filter((item) => item.ok).length, candidates: results.length, improvement, score: Math.round(healthScore(best)) };
+    runtime.lastResults = { at: new Date().toISOString(), source: 'automatic', backend: backend.id, group: group.name, active, region: selectedRegion, results: results.map(({ name, delay, ok, error }) => ({ name, delay, ok, error })) };
     addHistory(entry);
     return sendJson(res, 200, entry);
   }
