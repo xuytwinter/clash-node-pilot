@@ -1,0 +1,5 @@
+$ErrorActionPreference = 'SilentlyContinue'
+$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+Remove-ItemProperty -Path $runKey -Name 'Clash Node Pilot'
+Remove-ItemProperty -Path $runKey -Name 'Clash Node Pilot Optimizer'
+Write-Host 'Clash Node Pilot startup disabled.'

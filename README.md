@@ -49,10 +49,16 @@ npm start
 
 ## Windows 开机启动
 
+首次运行 `npm start` 后，打开控制台，点击页面右上角的“开机启动”即可。按钮显示“已开启”后，以后登录 Windows 不再需要手动执行 `npm start`。
+
+该开关只管理 Clash Node Pilot 后端和三分钟优化任务，不会修改 Clash Verge、CFW 或 v2rayN 的开机设置。
+
+也可以使用命令行安装当前用户启动项：
+
 无需管理员权限的当前用户启动项：
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\install-autostart.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\install-pilot-autostart.ps1
 ```
 
 使用任务计划程序安装时，请以管理员身份打开 PowerShell：
@@ -68,7 +74,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\install-autostart-admin.ps1
 卸载开机启动项：
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\uninstall-autostart.ps1
+powershell.exe -ExecutionPolicy Bypass -File .\uninstall-pilot-autostart.ps1
 ```
 
 ## 节点选择策略

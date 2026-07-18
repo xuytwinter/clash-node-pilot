@@ -72,6 +72,9 @@ async function loadStatus() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
     state.status = data;
+    $('startupButton').hidden = !data.startup?.supported;
+    $('startupButton').classList.toggle('enabled', Boolean(data.startup?.enabled));
+    $('startupButton').textContent = data.startup?.enabled ? `开机启动 · 已开启${data.startup.source === 'scheduled-task' ? '（任务计划）' : ''}` : '开机启动';
     renderAutomation(data);
     $('backendSelect').innerHTML = (data.backends || []).map((backend) => `<option value="${escapeHtml(backend.id)}" ${backend.online ? '' : 'disabled'}>${escapeHtml(backend.name)} · ${backend.online ? `在线 ${escapeHtml(backend.version || '')}` : '离线'}</option>`).join('');
     $('backendSelect').value = data.backend?.id || '';
@@ -151,6 +154,7 @@ async function optimize() {
 
 $('groupSelect').addEventListener('change', (event) => { state.group = event.target.value; state.region = ''; state.resultsSource=null; $('results').className='results'; $('empty').style.display='flex'; $('resultCount').textContent='等待自动测速'; renderRegions(); renderPersistedResults(state.status); });
 $('backendSelect').addEventListener('change', async (event) => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'backend', value:event.target.value }) }); state.group=''; state.region=''; loadStatus(); });
+$('startupButton').addEventListener('click', async () => { const enabled=!state.status?.startup?.enabled; $('startupButton').disabled=true; try { const response=await fetch('/api/startup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}); const data=await response.json(); if(!response.ok) throw new Error(data.error); $('message').textContent=data.enabled?'开机启动已开启。':'开机启动已关闭。'; await loadStatus(); } catch(error) { $('message').textContent=error.message; $('message').className='message error'; } finally { $('startupButton').disabled=false; } });
 $('settingsButton').addEventListener('click', () => $('settingsDialog').showModal());
 $('closeSettings').addEventListener('click', () => $('settingsDialog').close());
 $('cancelSettings').addEventListener('click', () => $('settingsDialog').close());

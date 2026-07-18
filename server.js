@@ -130,6 +130,29 @@ function detectV2rayN() {
   } catch { return { id: 'v2rayn', name: 'v2rayN', online: true, writable: false, mode: 'read-only', error: 'Configuration could not be read' }; }
 }
 
+function startupStatus() {
+  if (process.platform !== 'win32') return { supported: false, enabled: false, source: null };
+  try {
+    execFileSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Clash Node Pilot'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
+    execFileSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Clash Node Pilot Optimizer'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
+    return { supported: true, enabled: true, source: 'current-user' };
+  } catch { /* check elevated scheduled tasks next */ }
+  try {
+    execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
+    execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot Optimizer'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
+    return { supported: true, enabled: true, source: 'scheduled-task' };
+  } catch { return { supported: true, enabled: false, source: null }; }
+}
+
+function setStartupEnabled(enabled) {
+  if (process.platform !== 'win32') throw new Error('Startup management is currently available on Windows only');
+  const current = startupStatus();
+  if (!enabled && current.source === 'scheduled-task') throw new Error('当前使用管理员任务计划启动，请以管理员身份运行 uninstall-autostart.ps1 关闭');
+  const script = path.join(__dirname, enabled ? 'install-pilot-autostart.ps1' : 'uninstall-pilot-autostart.ps1');
+  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], { stdio: 'ignore', timeout: 10000, windowsHide: true });
+  return startupStatus();
+}
+
 async function activeBackend() {
   const backends = await discoverBackends();
   return backends.find((item) => item.online && item.id === runtime.selectedBackend) || backends.find((item) => item.online) || null;
@@ -291,6 +314,7 @@ async function apiHandler(req, res, url) {
     const v2rayN = detectV2rayN();
     return sendJson(res, 200, {
       connected: true,
+      startup: startupStatus(),
       backend: { id: backend.id, name: backend.name, version: backend.version },
       backends: discovered.map(({ id, name, online, version }) => ({ id, name, online, version })),
       detectedClients: [...discovered.map(({ id, name, online, version }) => ({ id, name, online, version, writable: true })), v2rayN],
@@ -300,6 +324,11 @@ async function apiHandler(req, res, url) {
       automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
+  }
+  if (url.pathname === '/api/startup' && req.method === 'POST') {
+    const body = await readJson(req);
+    const startup = setStartupEnabled(Boolean(body.enabled));
+    return sendJson(res, 200, startup);
   }
   if (req.method === 'POST' && url.pathname === '/api/automation') {
     const body = await readJson(req);
