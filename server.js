@@ -22,7 +22,30 @@ const TARGET_GROUP = process.env.CLASH_TARGET_GROUP || '🐟漏网之鱼';
 const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
-const runtime = { running: false, startedAt: null, history: [], locks: new Map(), lastAuto: new Map(), nextRunAt: null };
+const STATE_PATH = process.env.CLASH_PILOT_STATE || path.join(__dirname, 'data', 'state.json');
+const runtime = { running: false, startedAt: null, history: [], locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false };
+
+function loadRuntimeState() {
+  try {
+    const saved = JSON.parse(fsSync.readFileSync(STATE_PATH, 'utf8'));
+    runtime.history = Array.isArray(saved.history) ? saved.history.slice(0, 100) : [];
+    runtime.monitorOnly = Boolean(saved.monitorOnly);
+    runtime.nextRunAt = saved.nextRunAt || null;
+    runtime.locks = new Map(Object.entries(saved.locks || {}).map(([key, value]) => [key, Number(value)]));
+    runtime.lastAuto = new Map(Object.entries(saved.lastAuto || {}));
+  } catch { /* first run or invalid state starts cleanly */ }
+}
+
+function persistRuntimeState() {
+  try {
+    fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
+    const temporary = `${STATE_PATH}.tmp`;
+    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto) }, null, 2), 'utf8');
+    fsSync.renameSync(temporary, STATE_PATH);
+  } catch { /* state persistence must not stop proxy switching */ }
+}
+
+loadRuntimeState();
 
 let REGIONS = [
   { id: 'jp', label: '日本', flag: '🇯🇵', pattern: /🇯🇵|日本|东京|東京|大阪|名古屋|jp\b|japan|tokyo|osaka/i },
@@ -140,7 +163,8 @@ async function measureNodeStable(name, testUrl, timeout, samples = 2) {
 
 function addHistory(entry) {
   runtime.history.unshift({ at: new Date().toISOString(), ...entry });
-  runtime.history = runtime.history.slice(0, 30);
+  runtime.history = runtime.history.slice(0, 100);
+  persistRuntimeState();
 }
 
 function lockRemaining(group) {
@@ -195,6 +219,8 @@ async function apiHandler(req, res, url) {
     if (body.action === 'lock') runtime.locks.set(group.name, Date.now() + MANUAL_PAUSE_MS);
     if (body.action === 'unlock') runtime.locks.delete(group.name);
     if (body.action === 'monitor') runtime.monitorOnly = Boolean(body.value);
+    if (body.action === 'clear-history') runtime.history = [];
+    persistRuntimeState();
     return sendJson(res, 200, { lockMs: lockRemaining(group.name), monitorOnly: Boolean(runtime.monitorOnly) });
   }
   if (req.method === 'POST' && url.pathname === '/api/optimize') {
@@ -235,6 +261,7 @@ async function apiHandler(req, res, url) {
     const previousAuto = runtime.lastAuto.get(group.name);
     if (previousAuto && previousAuto !== group.now) {
       runtime.locks.set(group.name, Date.now() + MANUAL_PAUSE_MS);
+      persistRuntimeState();
       runtime.running = false;
       addHistory({ group: group.name, skipped: true, reason: '检测到手动切换', lockMs: MANUAL_PAUSE_MS });
       return sendJson(res, 200, { skipped: true, reason: '检测到手动切换，已暂停自动切换', lockMs: MANUAL_PAUSE_MS, group: group.name, active: group.now });
@@ -267,6 +294,7 @@ async function apiHandler(req, res, url) {
     runtime.lastAuto.set(group.name, active);
     runtime.running = false;
     runtime.nextRunAt = new Date(Date.now() + 180000).toISOString();
+    persistRuntimeState();
     const entry = { skipped: false, region: selectedRegion, fallbackFrom, group: group.name, previous: group.now, active, best, switched: shouldSwitch && !runtime.monitorOnly, success: results.filter((item) => item.ok).length, candidates: results.length, improvement };
     addHistory(entry);
     return sendJson(res, 200, entry);

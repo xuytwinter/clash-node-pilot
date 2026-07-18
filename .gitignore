@@ -2,6 +2,7 @@ node_modules/
 .omx/
 work/
 outputs/
+data/
 *.log
 *.zip
 .DS_Store
