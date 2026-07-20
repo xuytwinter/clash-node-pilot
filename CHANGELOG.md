@@ -12,3 +12,5 @@
 - Added persistent failure-rate health scoring and recent latency visualization.
 - Added automatic discovery and selection of Clash Verge, Clash for Windows, and custom Clash/Mihomo controllers.
 - Added safe read-only v2rayN 7.x detection for the current node, historical delay, and inventory size.
+- Replaced fragile direct logon tasks with a network-aware Mihomo health watchdog.
+- Added automatic recovery for the case where the Clash Verge window exists but the core/controller is unavailable.

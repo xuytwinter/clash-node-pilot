@@ -51,7 +51,7 @@ npm start
 
 首次运行 `npm start` 后，打开控制台，点击页面右上角的“开机启动”即可。按钮显示“已开启”后，以后登录 Windows 不再需要手动执行 `npm start`。
 
-该开关只管理 Clash Node Pilot 后端和三分钟优化任务，不会修改 Clash Verge、CFW 或 v2rayN 的开机设置。
+该开关会在登录后等待网络可用，验证 Clash Verge/Mihomo 控制器健康，必要时恢复 Clash Verge 核心，然后启动 Node Pilot 后端和三分钟优化循环。它不会修改 CFW 或 v2rayN 的开机设置。
 
 也可以使用命令行安装当前用户启动项：
 
@@ -67,9 +67,13 @@ powershell.exe -ExecutionPolicy Bypass -File .\install-pilot-autostart.ps1
 powershell.exe -ExecutionPolicy Bypass -File .\install-autostart-admin.ps1
 ```
 
+管理员方案额外注册每 2 分钟运行一次的健康看门狗。它不是只检查 Clash Verge 窗口是否存在，而是请求 Mihomo `/version` 接口；如果出现“Clash Verge 窗口已打开但核心不可用”，看门狗会自动重启 Clash Verge 并等待控制器恢复。
+
 自动优选任务每 3 分钟运行一次。日志写入 `auto-optimize.log`，该文件不会被 Git 跟踪。
 
 运行状态保存在本地 `data/state.json`。`data` 目录不会被 Git 跟踪，其中也不会保存 Mihomo 控制器密钥。
+
+启动恢复日志保存在 `data/startup-watchdog.log`，日志不会包含控制器密钥。
 
 卸载开机启动项：
 
