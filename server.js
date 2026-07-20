@@ -133,12 +133,13 @@ function detectV2rayN() {
 function startupStatus() {
   if (process.platform !== 'win32') return { supported: false, enabled: false, source: null };
   try {
-    execFileSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Clash Node Pilot'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
+    execFileSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Clash Node Pilot Startup'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
     execFileSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Clash Node Pilot Optimizer'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
     return { supported: true, enabled: true, source: 'current-user' };
   } catch { /* check elevated scheduled tasks next */ }
   try {
-    execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
+    execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot Startup'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
+    execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot Watchdog'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
     execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot Optimizer'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
     return { supported: true, enabled: true, source: 'scheduled-task' };
   } catch { return { supported: true, enabled: false, source: null }; }
@@ -147,7 +148,7 @@ function startupStatus() {
 function setStartupEnabled(enabled) {
   if (process.platform !== 'win32') throw new Error('Startup management is currently available on Windows only');
   const current = startupStatus();
-  if (!enabled && current.source === 'scheduled-task') throw new Error('当前使用管理员任务计划启动，请以管理员身份运行 uninstall-autostart.ps1 关闭');
+  if (!enabled && current.source === 'scheduled-task') throw new Error('当前使用管理员恢复任务，请以管理员身份运行 uninstall-autostart.ps1 关闭');
   const script = path.join(__dirname, enabled ? 'install-pilot-autostart.ps1' : 'uninstall-pilot-autostart.ps1');
   execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], { stdio: 'ignore', timeout: 10000, windowsHide: true });
   return startupStatus();
