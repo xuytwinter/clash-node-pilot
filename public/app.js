@@ -42,13 +42,15 @@ function renderAutomation(data) {
   const lock = Math.ceil((automation.lockMs || 0) / 60000);
   $('monitorOnly').checked = Boolean(automation.monitorOnly);
   if (!$('settingsDialog').open) {
+    $('autoInterval').value = automation.settings?.autoIntervalMinutes ?? 3;
     $('switchThreshold').value = automation.settings?.switchThresholdMs ?? 25;
     $('samples').value = automation.settings?.samples ?? 2;
     $('pauseMinutes').value = automation.settings?.manualPauseMinutes ?? 15;
   }
   $('lockButton').textContent = lock ? `解除保护（${lock} 分钟）` : '锁定 15 分钟';
   const next = automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleTimeString() : '等待下一轮';
-  $('automationStatus').textContent = lock ? `自动切换已暂停，剩余约 ${lock} 分钟 · 下次轮询 ${next}` : `自动轮询每 3 分钟运行 · 跟踪 ${automation.trackedNodes || 0} 个节点 · 下次运行 ${next}`;
+  const interval = automation.settings?.autoIntervalMinutes ?? 3;
+  $('automationStatus').textContent = lock ? `检测到你手动切换了节点：为保留你的选择，自动测速与切换暂停约 ${lock} 分钟 · 下次检查 ${next}` : `自动测速每 ${interval} 分钟运行 · 跟踪 ${automation.trackedNodes || 0} 个节点 · 下次测速 ${next}`;
   const trend = (automation.history || []).filter((item) => item.best?.delay).slice(0, 20).reverse();
   const maxDelay = Math.max(1, ...trend.map((item) => item.best.delay));
   $('trendHeading').hidden = !trend.length;
@@ -162,6 +164,6 @@ $('refreshButton').addEventListener('click', loadStatus);
 $('optimizeButton').addEventListener('click', optimize);
 document.getElementById('monitorOnly').addEventListener('change', async (event) => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'monitor', value:event.target.checked }) }); loadStatus(); });
 document.getElementById('lockButton').addEventListener('click', async () => { const locked = document.getElementById('lockButton').textContent.includes('解除'); await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:locked ? 'unlock' : 'lock' }) }); loadStatus(); });
-document.getElementById('saveSettings').addEventListener('click', async () => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'settings', settings:{ switchThresholdMs:Number($('switchThreshold').value), samples:Number($('samples').value), manualPauseMinutes:Number($('pauseMinutes').value) } }) }); $('settingsDialog').close(); $('message').textContent='自动设置已保存。'; loadStatus(); });
+document.getElementById('saveSettings').addEventListener('click', async () => { await fetch('/api/automation', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ action:'settings', settings:{ autoIntervalMinutes:Number($('autoInterval').value), switchThresholdMs:Number($('switchThreshold').value), samples:Number($('samples').value), manualPauseMinutes:Number($('pauseMinutes').value) } }) }); $('settingsDialog').close(); $('message').textContent='自动测速设置已保存。'; loadStatus(); });
 loadStatus();
 setInterval(loadStatus, 15000);

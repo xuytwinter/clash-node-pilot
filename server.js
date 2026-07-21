@@ -30,7 +30,7 @@ const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
 const STATE_PATH = process.env.CLASH_PILOT_STATE || path.join(__dirname, 'data', 'state.json');
-const runtime = { running: false, startedAt: null, history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, settings: { switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
+const runtime = { running: false, startedAt: null, history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
 
 function loadRuntimeState() {
   try {
@@ -349,10 +349,12 @@ async function apiHandler(req, res, url) {
     if (body.action === 'monitor') runtime.monitorOnly = Boolean(body.value);
     if (body.action === 'clear-history') runtime.history = [];
     if (body.action === 'settings') runtime.settings = {
+      autoIntervalMinutes: Math.min(60, Math.max(1, Number(body.settings?.autoIntervalMinutes) || 3)),
       switchThresholdMs: Math.min(500, Math.max(0, Number(body.settings?.switchThresholdMs) || 25)),
       samples: Math.min(5, Math.max(1, Number(body.settings?.samples) || 2)),
       manualPauseMinutes: Math.min(1440, Math.max(1, Number(body.settings?.manualPauseMinutes) || 15))
     };
+    if (body.action === 'settings') runtime.nextRunAt = new Date(Date.now() + runtime.settings.autoIntervalMinutes * 60000).toISOString();
     persistRuntimeState();
     return sendJson(res, 200, { lockMs: lockRemaining(group.name), monitorOnly: Boolean(runtime.monitorOnly) });
   }
@@ -384,8 +386,13 @@ async function apiHandler(req, res, url) {
   }
   if (req.method === 'POST' && url.pathname === '/api/auto-optimize') {
     if (runtime.running) return sendJson(res, 409, { skipped: true, reason: '已有优选任务正在运行' });
+    const now = Date.now();
+    const nextRunAt = Date.parse(runtime.nextRunAt || '');
+    if (Number.isFinite(nextRunAt) && nextRunAt > now) return sendJson(res, 200, { skipped: true, reason: 'Not due yet', nextRunAt: runtime.nextRunAt });
     runtime.running = true;
     runtime.startedAt = new Date().toISOString();
+    runtime.nextRunAt = new Date(now + runtime.settings.autoIntervalMinutes * 60000).toISOString();
+    persistRuntimeState();
     const { groups, backend } = await inventory();
     const group = await pickPrimaryGroup(groups, backend);
     if (!group) { runtime.running = false; return sendJson(res, 404, { skipped: true, reason: '没有可用的手动代理组' }); }
@@ -429,7 +436,6 @@ async function apiHandler(req, res, url) {
     const active = shouldSwitch && !runtime.monitorOnly ? best.name : group.now;
     runtime.lastAuto.set(group.name, active);
     runtime.running = false;
-    runtime.nextRunAt = new Date(Date.now() + 180000).toISOString();
     persistRuntimeState();
     const entry = { skipped: false, region: selectedRegion, fallbackFrom, group: group.name, previous: group.now, active, best, switched: shouldSwitch && !runtime.monitorOnly, success: results.filter((item) => item.ok).length, candidates: results.length, improvement, score: Math.round(healthScore(best)) };
     runtime.lastResults = { at: new Date().toISOString(), source: 'automatic', backend: backend.id, group: group.name, active, region: selectedRegion, results: results.map(({ name, delay, ok, error }) => ({ name, delay, ok, error })) };
@@ -461,6 +467,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-if (require.main === module) server.listen(PORT, HOST, () => console.log(`Clash Node Pilot: http://${HOST}:${PORT}`));
+if (require.main === module) {
+  server.listen(PORT, HOST, () => {
+    console.log(`Clash Node Pilot: http://${HOST}:${PORT}`);
+    const runAutomaticCheck = () => fetch(`http://${HOST}:${PORT}/api/auto-optimize`, { method: 'POST' }).catch(() => {});
+    setTimeout(runAutomaticCheck, 10000);
+    setInterval(runAutomaticCheck, 15000);
+  });
+}
 
 module.exports = { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer };

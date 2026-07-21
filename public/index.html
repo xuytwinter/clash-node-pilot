@@ -19,7 +19,7 @@
 
     <section class="workspace">
       <div class="controls">
-        <div class="control-heading"><label for="backendSelect">代理客户端</label><button id="settingsButton" class="settings-button" type="button"><span aria-hidden="true">⚙</span>测速设置</button></div>
+        <div class="control-heading"><label for="backendSelect">代理客户端</label><button id="settingsButton" class="settings-button" type="button"><span aria-hidden="true">⚙</span>自动测速设置</button></div>
         <select id="backendSelect"></select>
         <p id="clientInfo" class="automation-status"></p>
         <label for="groupSelect">切换代理组</label>
@@ -34,13 +34,14 @@
           <button id="lockButton" class="text-button" type="button">锁定 15 分钟</button>
         </div>
         <dialog id="settingsDialog" class="settings-dialog">
-          <div class="dialog-heading"><div><p class="eyebrow">节点优选</p><h2>测速设置</h2></div><button id="closeSettings" class="icon-button" type="button" aria-label="关闭设置">×</button></div>
+          <div class="dialog-heading"><div><p class="eyebrow">节点优选</p><h2>自动测速设置</h2></div><button id="closeSettings" class="icon-button" type="button" aria-label="关闭设置">×</button></div>
           <div class="dialog-fields">
+            <label for="autoInterval">自动测速间隔（分钟）</label><input id="autoInterval" type="number" min="1" max="60" step="1">
             <label for="testUrl">测速地址</label><input id="testUrl" type="url">
             <label for="timeout">超时（毫秒）</label><input id="timeout" type="number" min="1000" max="10000" step="500">
-            <label for="switchThreshold">自动切换最低改善（毫秒）</label><input id="switchThreshold" type="number" min="0" max="500" step="5">
-            <label for="samples">自动测速采样次数</label><input id="samples" type="number" min="1" max="5">
-            <label for="pauseMinutes">手动操作保护（分钟）</label><input id="pauseMinutes" type="number" min="1" max="1440">
+            <label for="switchThreshold">自动切换至少快多少（毫秒）</label><input id="switchThreshold" type="number" min="0" max="500" step="5">
+            <label for="samples">每个节点测速次数</label><input id="samples" type="number" min="1" max="5">
+            <label for="pauseMinutes">手动切换后暂停自动优化（分钟）</label><input id="pauseMinutes" type="number" min="1" max="1440">
           </div>
           <div class="dialog-actions"><button id="cancelSettings" class="secondary" type="button">取消</button><button id="saveSettings" class="primary compact" type="button">保存设置</button></div>
         </dialog>
