@@ -25,12 +25,16 @@ const WEBVIEW_LEVELDB = path.join(
 );
 const DEFAULT_TEST_URL = 'https://www.gstatic.com/generate_204';
 const VERIFY_TEST_URL = 'https://cp.cloudflare.com/generate_204';
+const CONNECTIVITY_TEST_URLS = [
+  { id: 'google', url: 'https://www.gstatic.com/generate_204' },
+  { id: 'openai', url: 'https://chatgpt.com/cdn-cgi/trace' }
+];
 const TARGET_GROUP = process.env.CLASH_TARGET_GROUP || '🐟漏网之鱼';
 const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
 const STATE_PATH = process.env.CLASH_PILOT_STATE || path.join(__dirname, 'data', 'state.json');
-const runtime = { running: false, startedAt: null, history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
+const runtime = { running: false, startedAt: null, history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, nextConnectivityCheckAt: null, monitorOnly: false, selectedBackend: null, settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000, connectivityCheckMinutes: 1, connectivityTimeoutMs: 5000 } };
 
 function loadRuntimeState() {
   try {
@@ -40,6 +44,7 @@ function loadRuntimeState() {
     runtime.lastResults = saved.lastResults || null;
     runtime.monitorOnly = Boolean(saved.monitorOnly);
     runtime.nextRunAt = saved.nextRunAt || null;
+    runtime.nextConnectivityCheckAt = saved.nextConnectivityCheckAt || null;
     runtime.locks = new Map(Object.entries(saved.locks || {}).map(([key, value]) => [key, Number(value)]));
     runtime.lastAuto = new Map(Object.entries(saved.lastAuto || {}));
     runtime.settings = { ...runtime.settings, ...(saved.settings || {}) };
@@ -51,7 +56,7 @@ function persistRuntimeState() {
   try {
     fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const temporary = `${STATE_PATH}.tmp`;
-    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, lastResults: runtime.lastResults, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings, selectedBackend: runtime.selectedBackend }, null, 2), 'utf8');
+    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, lastResults: runtime.lastResults, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, nextConnectivityCheckAt: runtime.nextConnectivityCheckAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings, selectedBackend: runtime.selectedBackend }, null, 2), 'utf8');
     fsSync.renameSync(temporary, STATE_PATH);
   } catch { /* state persistence must not stop proxy switching */ }
 }
@@ -250,6 +255,148 @@ async function measureNodeStable(name, testUrl, timeout, samples = 2) {
   return { name, delay: delays[Math.floor(delays.length / 2)], ok: true, samples: attempts };
 }
 
+async function measureTargets(name, targets = CONNECTIVITY_TEST_URLS, timeout = 5000) {
+  const checks = [];
+  for (const target of targets) {
+    checks.push({ ...target, ...(await measureNode(name, target.url, timeout)) });
+  }
+  const okChecks = checks.filter((item) => item.ok);
+  return {
+    name,
+    ok: okChecks.length === checks.length,
+    delay: okChecks.length ? Math.max(...okChecks.map((item) => item.delay)) : null,
+    checks
+  };
+}
+
+function isRealNode(proxies, name) {
+  const proxy = proxies.get(name);
+  return proxy && !GROUP_TYPES.has(proxy.type) && !['DIRECT', 'REJECT'].includes(name);
+}
+
+function selectorGroupNames(proxies) {
+  return [...proxies.entries()].filter(([, proxy]) => proxy.type === 'Selector').map(([name]) => name);
+}
+
+function realMembers(proxies, groupName) {
+  const proxy = proxies.get(groupName);
+  return (proxy?.all || []).filter((name) => isRealNode(proxies, name));
+}
+
+function resolveEffectiveSelector(proxies, groupName) {
+  const chain = [];
+  const seen = new Set();
+  let current = groupName;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const proxy = proxies.get(current);
+    if (!proxy || proxy.type !== 'Selector') break;
+    chain.push({ name: current, now: proxy.now });
+    const next = proxy.now;
+    if (proxies.get(next)?.type === 'Selector') {
+      current = next;
+      continue;
+    }
+    return { group: groupName, chain, controlGroup: current, leaf: next || null };
+  }
+  return { group: groupName, chain, controlGroup: chain.at(-1)?.name || groupName, leaf: null };
+}
+
+function unique(items) {
+  return [...new Set(items.filter(Boolean))];
+}
+
+async function connectivityGroupCandidates(proxies, groups, backend) {
+  const selected = backend?.id === 'clash-verge' ? await selectedUiGroup(groups) : null;
+  const names = selectorGroupNames(proxies);
+  return unique([
+    ...names.filter((name) => /AI|OpenAI|ChatGPT|Gemini|Claude|google/i.test(name)),
+    ...names.filter((name) => /节点选择|自[动動]|proxy|select/i.test(name)),
+    selected,
+    TARGET_GROUP,
+    ...names.filter((name) => /漏网之鱼|final|match/i.test(name))
+  ]).filter((name) => proxies.get(name)?.type === 'Selector');
+}
+
+async function healConnectivityForGroup(proxies, groupName, options = {}) {
+  const timeout = Math.min(10000, Math.max(1000, Number(options.timeout) || runtime.settings.connectivityTimeoutMs || 5000));
+  const targets = options.targets || CONNECTIVITY_TEST_URLS;
+  const resolved = resolveEffectiveSelector(proxies, groupName);
+  if (!resolved.leaf || !isRealNode(proxies, resolved.leaf)) {
+    return { group: groupName, skipped: true, reason: '当前选择不是可测速节点', resolved };
+  }
+  const current = await measureTargets(resolved.leaf, targets, timeout);
+  updateHealth([current]);
+  if (current.ok) return { group: groupName, skipped: true, reason: '当前 Google/OpenAI 出站健康', resolved, current };
+
+  const controlGroup = resolved.controlGroup;
+  const members = realMembers(proxies, controlGroup);
+  const currentRegion = regionFor(resolved.leaf);
+  const sameRegion = currentRegion === 'other' ? [] : members.filter((name) => name !== resolved.leaf && regionFor(name) === currentRegion);
+  const alternatives = members.filter((name) => name !== resolved.leaf && !sameRegion.includes(name));
+  const batches = [
+    { fallbackFrom: null, candidates: sameRegion },
+    { fallbackFrom: currentRegion === 'other' ? null : currentRegion, candidates: alternatives }
+  ].filter((batch) => batch.candidates.length > 0);
+
+  let results = [];
+  let fallbackFrom = null;
+  let best = null;
+  for (const batch of batches) {
+    const batchResults = await mapLimit(batch.candidates, 4, (name) => measureTargets(name, targets, timeout));
+    updateHealth(batchResults);
+    batchResults.sort((a, b) => (a.ok ? healthScore(a) : Infinity) - (b.ok ? healthScore(b) : Infinity));
+    results = batchResults;
+    fallbackFrom = batch.fallbackFrom;
+    best = batchResults.find((item) => item.ok);
+    if (best) break;
+  }
+
+  if (!best) {
+    return { group: groupName, controlGroup, skipped: true, reason: '候选节点无法同时通过 Google/OpenAI 保通检查', resolved, current, fallbackFrom, results };
+  }
+
+  const shouldSwitch = options.switch !== false && !runtime.monitorOnly;
+  if (shouldSwitch) {
+    await controllerRequest(`/proxies/${encodeURIComponent(controlGroup)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ name: best.name })
+    });
+    runtime.lastAuto.set(controlGroup, best.name);
+  }
+  return {
+    group: groupName,
+    controlGroup,
+    skipped: false,
+    reason: 'Google/OpenAI 当前出站失败，已选择健康备用节点',
+    resolved,
+    previous: resolved.leaf,
+    active: shouldSwitch ? best.name : resolved.leaf,
+    current,
+    best,
+    switched: shouldSwitch,
+    fallbackFrom,
+    results
+  };
+}
+
+async function runConnectivityHeal(options = {}) {
+  const { proxies, groups, backend } = await inventory();
+  const candidates = await connectivityGroupCandidates(proxies, groups, backend);
+  const checkedControls = new Set();
+  const attempts = [];
+  for (const groupName of candidates) {
+    const resolved = resolveEffectiveSelector(proxies, groupName);
+    if (checkedControls.has(resolved.controlGroup)) continue;
+    checkedControls.add(resolved.controlGroup);
+    const attempt = await healConnectivityForGroup(proxies, groupName, options);
+    attempts.push(attempt);
+    if (!attempt.skipped || attempt.reason.includes('候选节点无法')) return { ...attempt, attempts };
+  }
+  return { skipped: true, reason: 'Google/OpenAI 相关出站均健康', attempts };
+}
+
 function addHistory(entry) {
   runtime.history.unshift({ at: new Date().toISOString(), ...entry });
   runtime.history = runtime.history.slice(0, 100);
@@ -322,7 +469,7 @@ async function apiHandler(req, res, url) {
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
       targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
-      automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
+      automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, nextConnectivityCheckAt: runtime.nextConnectivityCheckAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
   }
@@ -352,7 +499,9 @@ async function apiHandler(req, res, url) {
       autoIntervalMinutes: Math.min(60, Math.max(1, Number(body.settings?.autoIntervalMinutes) || 3)),
       switchThresholdMs: Math.min(500, Math.max(0, Number(body.settings?.switchThresholdMs) || 25)),
       samples: Math.min(5, Math.max(1, Number(body.settings?.samples) || 2)),
-      manualPauseMinutes: Math.min(1440, Math.max(1, Number(body.settings?.manualPauseMinutes) || 15))
+      manualPauseMinutes: Math.min(1440, Math.max(1, Number(body.settings?.manualPauseMinutes) || 15)),
+      connectivityCheckMinutes: Math.min(30, Math.max(1, Number(body.settings?.connectivityCheckMinutes) || 1)),
+      connectivityTimeoutMs: Math.min(10000, Math.max(1000, Number(body.settings?.connectivityTimeoutMs) || 5000))
     };
     if (body.action === 'settings') runtime.nextRunAt = new Date(Date.now() + runtime.settings.autoIntervalMinutes * 60000).toISOString();
     persistRuntimeState();
@@ -384,11 +533,43 @@ async function apiHandler(req, res, url) {
     const active = refreshed.proxies?.[group.name]?.now;
     return sendJson(res, 200, { region: region.label, group: group.name, previous: group.now, active, best, switched: group.now !== active, results });
   }
+  if (req.method === 'POST' && url.pathname === '/api/connectivity-heal') {
+    if (runtime.running) return sendJson(res, 409, { skipped: true, reason: '已有任务正在运行' });
+    runtime.running = true;
+    runtime.startedAt = new Date().toISOString();
+    runtime.nextConnectivityCheckAt = new Date(Date.now() + runtime.settings.connectivityCheckMinutes * 60000).toISOString();
+    persistRuntimeState();
+    const result = await runConnectivityHeal({ switch: true });
+    runtime.running = false;
+    persistRuntimeState();
+    const entry = { source: 'connectivity-heal', ...result };
+    runtime.lastResults = { at: new Date().toISOString(), source: 'connectivity-heal', group: result.group, active: result.active, results: (result.results || []).map(({ name, delay, ok, checks }) => ({ name, delay, ok, checks: checks?.map(({ id, ok, delay, error }) => ({ id, ok, delay, error })) })) };
+    addHistory(entry);
+    return sendJson(res, 200, entry);
+  }
   if (req.method === 'POST' && url.pathname === '/api/auto-optimize') {
     if (runtime.running) return sendJson(res, 409, { skipped: true, reason: '已有优选任务正在运行' });
     const now = Date.now();
     const nextRunAt = Date.parse(runtime.nextRunAt || '');
-    if (Number.isFinite(nextRunAt) && nextRunAt > now) return sendJson(res, 200, { skipped: true, reason: 'Not due yet', nextRunAt: runtime.nextRunAt });
+    const nextConnectivityCheckAt = Date.parse(runtime.nextConnectivityCheckAt || '');
+    if (Number.isFinite(nextRunAt) && nextRunAt > now) {
+      if (!Number.isFinite(nextConnectivityCheckAt) || nextConnectivityCheckAt <= now) {
+        runtime.running = true;
+        runtime.startedAt = new Date().toISOString();
+        runtime.nextConnectivityCheckAt = new Date(now + runtime.settings.connectivityCheckMinutes * 60000).toISOString();
+        persistRuntimeState();
+        const result = await runConnectivityHeal({ switch: true });
+        runtime.running = false;
+        persistRuntimeState();
+        if (!result.skipped || result.reason.includes('候选节点无法')) {
+          const entry = { source: 'connectivity-heal', ...result };
+          runtime.lastResults = { at: new Date().toISOString(), source: 'connectivity-heal', group: result.group, active: result.active, results: (result.results || []).map(({ name, delay, ok, checks }) => ({ name, delay, ok, checks: checks?.map(({ id, ok, delay, error }) => ({ id, ok, delay, error })) })) };
+          addHistory(entry);
+          return sendJson(res, 200, entry);
+        }
+      }
+      return sendJson(res, 200, { skipped: true, reason: 'Not due yet', nextRunAt: runtime.nextRunAt, nextConnectivityCheckAt: runtime.nextConnectivityCheckAt });
+    }
     runtime.running = true;
     runtime.startedAt = new Date().toISOString();
     runtime.nextRunAt = new Date(now + runtime.settings.autoIntervalMinutes * 60000).toISOString();
@@ -461,7 +642,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) await apiHandler(req, res, url);
     else await staticHandler(res, url);
   } catch (error) {
-    if (req.url?.startsWith('/api/auto-optimize')) runtime.running = false;
+    if (req.url?.startsWith('/api/auto-optimize') || req.url?.startsWith('/api/connectivity-heal')) runtime.running = false;
     const status = error.code === 'ENOENT' ? 404 : error.name === 'TimeoutError' ? 504 : error.status || 500;
     sendJson(res, status, { error: status === 500 ? `无法连接 Clash Verge：${error.message}` : error.message });
   }
@@ -476,4 +657,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer };
+module.exports = { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer, resolveEffectiveSelector, realMembers };
