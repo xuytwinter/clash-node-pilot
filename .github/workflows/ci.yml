@@ -115,6 +115,62 @@ jobs:
             test -x "$TMP/clash-node-pilot-v$VERSION-darwin-$ARCH/start-clash-node-pilot.command"
           done
 
+      - name: Smoke test packaged macOS runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          MACHINE="$(uname -m)"
+          if [[ "$MACHINE" == "arm64" ]]; then
+            ARCH="arm64"
+          else
+            ARCH="x64"
+          fi
+
+          ZIP="outputs/clash-node-pilot-v$VERSION-darwin-$ARCH-portable.zip"
+          TMP="$(mktemp -d)"
+          unzip -q "$ZIP" -d "$TMP"
+          APP="$TMP/clash-node-pilot-v$VERSION-darwin-$ARCH"
+          PORT="$(python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+)"
+          ISO="$(mktemp -d)"
+          LOG="$ISO/node-pilot.log"
+          export PORT
+          export APPDATA="$ISO/Roaming"
+          export LOCALAPPDATA="$ISO/Local"
+          export USERPROFILE="$ISO/User"
+          export HOME="$ISO/Home"
+          export CLASH_PILOT_STATE="$ISO/state.json"
+          export CLASH_PILOT_DISABLE_AUTO_LOOP="1"
+
+          "$APP/start-clash-node-pilot.command" >"$LOG" 2>&1 &
+          PID="$!"
+          cleanup() {
+            if kill -0 "$PID" 2>/dev/null; then
+              kill "$PID" 2>/dev/null || true
+              wait "$PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          for _ in {1..40}; do
+            if curl -fsS "http://127.0.0.1:$PORT/api/health" | tee "$ISO/health.json"; then
+              node -e "const fs=require('fs'); const h=JSON.parse(fs.readFileSync('$ISO/health.json','utf8')); if(!h.ok || h.version !== '$VERSION') process.exit(1);"
+              exit 0
+            fi
+            sleep 0.5
+          done
+
+          echo "Packaged macOS runtime did not become healthy" >&2
+          cat "$LOG" >&2 || true
+          exit 1
+
       - name: Upload macOS previews for external testing
         uses: actions/upload-artifact@v4
         with:
