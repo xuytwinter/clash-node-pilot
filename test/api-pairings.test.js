@@ -11,6 +11,7 @@ process.env.USERPROFILE = sandbox;
 process.env.HOME = sandbox;
 process.env.CLASH_PILOT_STATE = path.join(sandbox, 'state.json');
 process.env.CLASH_PILOT_DISABLE_AUTO_LOOP = '1';
+process.env.CLASH_PILOT_SECURE_STORE = 'file';
 
 const { server } = require('../server');
 

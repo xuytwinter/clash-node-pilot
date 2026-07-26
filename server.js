@@ -50,7 +50,8 @@ function migrateLegacyState(statePath = resolveStatePath(), legacyPath = LEGACY_
   return true;
 }
 const STATE_PATH = resolveStatePath();
-const secureStore = createSecureStore({ dataDir: resolvePilotDataDir() });
+const secureStorePlatform = process.env.CLASH_PILOT_SECURE_STORE === 'file' ? 'test' : process.platform;
+const secureStore = createSecureStore({ platform: secureStorePlatform, dataDir: resolvePilotDataDir() });
 const runtime = { running: false, startedAt: null, history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, pairings: [], settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
 
 function loadRuntimeState() {
