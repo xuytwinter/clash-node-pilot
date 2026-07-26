@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Extracted shared Controller, optimizer, region, capability, and diagnostic modules from the Windows service.
+- Added fake Mihomo Controller tests for authenticated inventory, delay checks, and Selector switching.
+- Added macOS Preview adapters, manual local Controller pairing, Keychain-backed secret storage, LaunchAgent plist generation, and darwin arm64/x64 portable packaging scripts.
+- Added Android companion source with non-root pairing, Android Keystore-backed storage, foreground service notification, boot/package restart handling, and pairing revocation.
+- Added cross-platform CI for Node core tests and Android source guards.
+
 ## [0.1.0] - 2026-07-26
 
 Preview release for Windows 10/11 x64.

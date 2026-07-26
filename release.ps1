@@ -77,6 +77,8 @@ $items = @(
   'RELEASE_NOTES.md',
   'server.js',
   'regions.json',
+  'src',
+  'docs',
   'public',
   'start-clash-node-pilot.cmd',
   'install-pilot-autostart.ps1',

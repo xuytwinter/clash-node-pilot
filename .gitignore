@@ -5,6 +5,12 @@ outputs/
 data/
 *.log
 *.zip
+*.apk
+*.aab
+.gradle/
+build/
+android/.gradle/
+android/**/build/
 .DS_Store
 Thumbs.db
 .env

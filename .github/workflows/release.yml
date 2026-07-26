@@ -35,6 +35,7 @@ jobs:
           npm test
           node --check server.js
           node --check public/app.js
+          Get-ChildItem -Path src -Recurse -Filter *.js | ForEach-Object { node --check $_.FullName }
           $scripts = Get-ChildItem -Path . -Filter *.ps1
           foreach ($script in $scripts) {
             $tokens = $null
@@ -66,6 +67,7 @@ jobs:
               "clash-node-pilot-v$version-windows-x64\runtime\NODE-LICENSE",
               "clash-node-pilot-v$version-windows-x64\runtime\NODE-RUNTIME.txt",
               "clash-node-pilot-v$version-windows-x64\server.js",
+              "clash-node-pilot-v$version-windows-x64\src\core\controller.js",
               "clash-node-pilot-v$version-windows-x64\public\index.html",
               "clash-node-pilot-v$version-windows-x64\regions.json"
             )) {
@@ -140,3 +142,50 @@ jobs:
             --title "Clash Node Pilot v$version Preview" `
             --notes-file RELEASE_NOTES.md `
             --latest
+
+  macos-preview:
+    runs-on: macos-latest
+    needs: release
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Build macOS portable packages
+        shell: bash
+        run: |
+          VERSION='${{ github.ref_name }}'
+          VERSION="${VERSION#v}" ./release-macos.sh
+
+      - name: Verify macOS package permissions
+        shell: bash
+        run: |
+          VERSION='${{ github.ref_name }}'
+          VERSION="${VERSION#v}"
+          for ARCH in arm64 x64; do
+            ZIP="outputs/clash-node-pilot-v$VERSION-darwin-$ARCH-portable.zip"
+            SHA="$ZIP.sha256"
+            test -f "$ZIP"
+            test -f "$SHA"
+            TMP="$(mktemp -d)"
+            unzip -q "$ZIP" -d "$TMP"
+            test -x "$TMP/clash-node-pilot-v$VERSION-darwin-$ARCH/runtime/node"
+            test -x "$TMP/clash-node-pilot-v$VERSION-darwin-$ARCH/start-clash-node-pilot.command"
+          done
+
+      - name: Upload macOS assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          VERSION='${{ github.ref_name }}'
+          VERSION="${VERSION#v}"
+          gh release upload '${{ github.ref_name }}' \
+            "outputs/clash-node-pilot-v$VERSION-darwin-arm64-portable.zip" \
+            "outputs/clash-node-pilot-v$VERSION-darwin-arm64-portable.zip.sha256" \
+            "outputs/clash-node-pilot-v$VERSION-darwin-x64-portable.zip" \
+            "outputs/clash-node-pilot-v$VERSION-darwin-x64-portable.zip.sha256" \
+            --clobber

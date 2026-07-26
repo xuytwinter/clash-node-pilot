@@ -1,5 +1,9 @@
 # Clash Node Pilot v0.1.0 Preview
 
+## Cross-platform Preview branch
+
+The next Preview branch adds shared Controller/optimizer core, macOS unsigned portable artifacts for Apple Silicon and Intel, and Android companion source prepared for signed APK builds. Android device validation and signed release material are still required before publishing an APK.
+
 This is the first Preview release for Windows 10/11 x64.
 
 ## Supported Scope

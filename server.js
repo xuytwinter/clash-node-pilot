@@ -1,9 +1,16 @@
 const http = require('node:http');
+const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
+const { ControllerClient, parseConfig: parseControllerConfig, probeConfigBackend } = require('./src/core/controller');
+const { createRegionResolver, loadRegions, summarizeRegions: summarizeRegionCounts } = require('./src/core/regions');
+const optimizerCore = require('./src/core/optimizer');
+const { discoverBackends: discoverPlatformBackends } = require('./src/platform');
+const { createSecureStore } = require('./src/platform/secure-store');
+const windowsPlatform = require('./src/platform/windows');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 3210);
@@ -43,7 +50,8 @@ function migrateLegacyState(statePath = resolveStatePath(), legacyPath = LEGACY_
   return true;
 }
 const STATE_PATH = resolveStatePath();
-const runtime = { running: false, startedAt: null, history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
+const secureStore = createSecureStore({ dataDir: resolvePilotDataDir() });
+const runtime = { running: false, startedAt: null, history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, pairings: [], settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
 
 function loadRuntimeState() {
   try {
@@ -57,6 +65,7 @@ function loadRuntimeState() {
     runtime.lastAuto = new Map(Object.entries(saved.lastAuto || {}));
     runtime.settings = { ...runtime.settings, ...(saved.settings || {}) };
     runtime.selectedBackend = saved.selectedBackend || null;
+    runtime.pairings = Array.isArray(saved.pairings) ? saved.pairings.filter((item) => item && item.id && item.controller) : [];
   } catch { /* first run or invalid state starts cleanly */ }
 }
 
@@ -64,7 +73,7 @@ function persistRuntimeState() {
   try {
     fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const temporary = `${STATE_PATH}.tmp`;
-    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, lastResults: runtime.lastResults, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings, selectedBackend: runtime.selectedBackend }, null, 2), 'utf8');
+    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, lastResults: runtime.lastResults, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings, selectedBackend: runtime.selectedBackend, pairings: runtime.pairings }, null, 2), 'utf8');
     fsSync.renameSync(temporary, STATE_PATH);
   } catch { /* state persistence must not stop proxy switching */ }
 }
@@ -86,33 +95,23 @@ try {
   const customRegions = JSON.parse(fsSync.readFileSync(path.join(__dirname, 'regions.json'), 'utf8'));
   REGIONS = REGIONS.map((region) => ({ ...region, pattern: customRegions[region.id] ? new RegExp(customRegions[region.id].join('|'), 'i') : region.pattern }));
 } catch { /* bundled defaults remain active */ }
+REGIONS = loadRegions(__dirname);
+const resolveRegion = createRegionResolver(REGIONS);
 
 function parseConfig(text) {
-  const value = (key) => {
-    const match = text.match(new RegExp(`^${key}:\\s*(.*?)\\s*$`, 'm'));
-    return match ? match[1].replace(/^['"]|['"]$/g, '') : '';
-  };
-  return { controller: value('external-controller') || '127.0.0.1:9097', secret: value('secret') };
+  return parseControllerConfig(text);
 }
 
 function regionFor(name) {
-  return REGIONS.find((region) => region.pattern.test(name))?.id || 'other';
+  return resolveRegion(name);
 }
 
 async function probeBackend(backend) {
-  try {
-    const config = parseConfig(await fs.readFile(backend.configPath, 'utf8'));
-    const controller = /^https?:\/\//i.test(config.controller) ? config.controller : `http://${config.controller}`;
-    const headers = config.secret ? { Authorization: `Bearer ${config.secret}` } : {};
-    const response = await fetch(`${controller}/version`, { headers, signal: AbortSignal.timeout(1800) });
-    if (!response.ok) return { ...backend, online: false };
-    const version = await response.json().catch(() => ({}));
-    return { ...backend, online: true, version: version.version || version.meta || 'unknown', config };
-  } catch { return { ...backend, online: false }; }
+  return probeConfigBackend(backend);
 }
 
 async function discoverBackends() {
-  return Promise.all(MIHOMO_BACKENDS.map(probeBackend));
+  return discoverPlatformBackends({ env: process.env, pairings: runtime.pairings, secureStore });
 }
 
 function discoverV2rayNHome() {
@@ -176,33 +175,15 @@ async function activeBackend() {
 async function controllerRequest(route, options = {}) {
   const backend = await activeBackend();
   if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
-  const config = backend.config;
-  const controller = /^https?:\/\//i.test(config.controller) ? config.controller : `http://${config.controller}`;
-  const headers = { Accept: 'application/json', ...options.headers };
-  if (config.secret) headers.Authorization = `Bearer ${config.secret}`;
-  const response = await fetch(`${controller}${route}`, { ...options, headers, signal: AbortSignal.timeout(options.timeout || 10000) });
-  const body = response.status === 204 ? null : await response.json().catch(() => null);
-  if (!response.ok) throw Object.assign(new Error(body?.message || `Mihomo returned ${response.status}`), { status: response.status });
-  return body;
+  const client = new ControllerClient({ controller: backend.config.controller, secret: backend.config.secret });
+  return client.request(route, options);
 }
 
 async function inventory() {
   const backend = await activeBackend();
   if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
   const payload = await controllerRequest('/proxies');
-  const entries = Object.entries(payload.proxies || {});
-  const proxies = new Map(entries);
-  const groups = entries
-    .filter(([, proxy]) => proxy.type === 'Selector')
-    .map(([name, proxy]) => ({
-      name,
-      now: proxy.now,
-      members: (proxy.all || []).filter((member) => {
-        const item = proxies.get(member);
-        return item && !GROUP_TYPES.has(item.type) && !['DIRECT', 'REJECT'].includes(member);
-      })
-    }))
-    .filter((group) => group.members.length > 0);
+  const { proxies, groups } = optimizerCore.selectorGroupsFromPayload(payload);
   return { proxies, groups, backend };
 }
 
@@ -237,31 +218,15 @@ async function pickPrimaryGroup(groups, backend) {
 }
 
 function summarizeRegions(members) {
-  const counts = new Map(REGIONS.map((region) => [region.id, 0]));
-  for (const member of members) {
-    const id = regionFor(member);
-    if (counts.has(id)) counts.set(id, counts.get(id) + 1);
-  }
-  return REGIONS.map(({ id, label, flag }) => ({ id, label, flag, count: counts.get(id) })).filter((item) => item.count > 0);
+  return summarizeRegionCounts(members, REGIONS, regionFor);
 }
 
 async function measureNode(name, testUrl, timeout) {
-  const route = `/proxies/${encodeURIComponent(name)}/delay?timeout=${timeout}&url=${encodeURIComponent(testUrl)}`;
-  const started = Date.now();
-  try {
-    const result = await controllerRequest(route, { timeout: timeout + 1500 });
-    return { name, delay: Number(result.delay), ok: Number(result.delay) > 0 };
-  } catch (error) {
-    return { name, delay: null, ok: false, error: error.message, elapsed: Date.now() - started };
-  }
+  return optimizerCore.measureNode(controllerRequest, name, testUrl, timeout);
 }
 
 async function measureNodeStable(name, testUrl, timeout, samples = 2) {
-  const attempts = [];
-  for (let index = 0; index < samples; index++) attempts.push(await measureNode(name, testUrl, timeout));
-  const delays = attempts.filter((item) => item.ok).map((item) => item.delay).sort((a, b) => a - b);
-  if (!delays.length) return { name, delay: null, ok: false, error: attempts.at(-1)?.error || 'All samples failed', samples: attempts };
-  return { name, delay: delays[Math.floor(delays.length / 2)], ok: true, samples: attempts };
+  return optimizerCore.measureNodeStable(controllerRequest, name, testUrl, timeout, samples);
 }
 
 function addHistory(entry) {
@@ -275,36 +240,44 @@ function lockRemaining(group) {
 }
 
 function updateHealth(results) {
-  for (const result of results) {
-    const health = runtime.health[result.name] || { success: 0, failure: 0, latencies: [] };
-    if (result.ok) {
-      health.success++;
-      health.latencies.unshift(result.delay);
-      health.latencies = health.latencies.slice(0, 20);
-    } else health.failure++;
-    health.updatedAt = new Date().toISOString();
-    runtime.health[result.name] = health;
-  }
+  optimizerCore.updateHealth(runtime.health, results);
 }
 
 function healthScore(result) {
-  const health = runtime.health[result.name] || { success: 0, failure: 0 };
-  const total = health.success + health.failure;
-  const failureRate = total ? health.failure / total : 0;
-  return result.delay + failureRate * 200;
+  return optimizerCore.healthScore(result, runtime.health);
 }
 
 async function mapLimit(items, limit, mapper) {
-  const results = new Array(items.length);
-  let cursor = 0;
-  async function worker() {
-    while (cursor < items.length) {
-      const index = cursor++;
-      results[index] = await mapper(items[index], index);
-    }
+  return optimizerCore.mapLimit(items, limit, mapper);
+}
+
+function validatePairingInput(body) {
+  const controller = String(body.controller || '').trim();
+  if (!/^(https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\]|::1)(:\d{2,5})?$/i.test(controller)) {
+    throw new Error('Controller must be an explicit local Clash/Mihomo URL such as http://127.0.0.1:9097');
   }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
+  return {
+    id: body.id && /^[a-z0-9][a-z0-9-]{2,60}$/i.test(body.id) ? body.id : `manual-${crypto.randomUUID()}`,
+    name: String(body.name || 'Manual Clash/Mihomo Controller').slice(0, 80),
+    controller
+  };
+}
+
+async function saveManualPairing(body) {
+  const pairing = validatePairingInput(body);
+  secureStore.set(pairing.id, String(body.secret || ''));
+  runtime.pairings = runtime.pairings.filter((item) => item.id !== pairing.id);
+  runtime.pairings.push(pairing);
+  runtime.selectedBackend = pairing.id;
+  persistRuntimeState();
+  return { id: pairing.id, name: pairing.name, controller: pairing.controller, secretStored: Boolean(body.secret), secureStore: secureStore.backend };
+}
+
+function revokeManualPairing(id) {
+  runtime.pairings = runtime.pairings.filter((item) => item.id !== id);
+  secureStore.delete(id);
+  if (runtime.selectedBackend === id) runtime.selectedBackend = null;
+  persistRuntimeState();
 }
 
 async function readJson(req) {
@@ -331,6 +304,18 @@ async function apiHandler(req, res, url) {
       port: PORT
     });
   }
+  if (req.method === 'GET' && url.pathname === '/api/pairings') {
+    return sendJson(res, 200, { secureStore: secureStore.backend, pairings: runtime.pairings.map(({ id, name, controller }) => ({ id, name, controller })) });
+  }
+  if (req.method === 'POST' && url.pathname === '/api/pairings') {
+    const saved = await saveManualPairing(await readJson(req));
+    return sendJson(res, 201, saved);
+  }
+  if (req.method === 'DELETE' && url.pathname.startsWith('/api/pairings/')) {
+    const id = decodeURIComponent(url.pathname.slice('/api/pairings/'.length));
+    revokeManualPairing(id);
+    return sendJson(res, 200, { revoked: true });
+  }
   if (req.method === 'GET' && url.pathname === '/api/status') {
     const { groups, backend } = await inventory();
     const targetGroup = await pickPrimaryGroup(groups, backend);
@@ -340,8 +325,8 @@ async function apiHandler(req, res, url) {
       connected: true,
       startup: startupStatus(),
       backend: { id: backend.id, name: backend.name, version: backend.version },
-      backends: discovered.map(({ id, name, online, version }) => ({ id, name, online, version })),
-      detectedClients: [...discovered.map(({ id, name, online, version }) => ({ id, name, online, version, writable: true })), v2rayN],
+      backends: discovered.map(({ id, name, online, version, platform, capabilities, diagnostic }) => ({ id, name, online, version, platform, capabilities, diagnostic })),
+      detectedClients: [...discovered.map(({ id, name, online, version, platform, capabilities, diagnostic }) => ({ id, name, online, version, platform, capabilities, diagnostic, writable: Boolean(capabilities?.switching === 'supported') })), v2rayN],
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
       targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
@@ -501,4 +486,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer, resolvePilotDataDir, resolveStatePath, migrateLegacyState };
+module.exports = { server, parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer, resolvePilotDataDir, resolveStatePath, migrateLegacyState };

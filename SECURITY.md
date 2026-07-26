@@ -4,7 +4,7 @@
 
 Clash Node Pilot is intended to run on the local machine. The HTTP server binds to `127.0.0.1` and reads the Mihomo controller secret from the local Clash Verge configuration at runtime.
 
-The secret is never returned by the API and is never written to the browser, Git history, or the optimizer log.
+The secret is never returned by the API and is never written to the browser, Git history, or the optimizer log. Manual macOS pairings store the Controller secret in Keychain through the local service; Android stores pairing material with Android Keystore-backed encryption.
 
 ## Reporting a vulnerability
 
@@ -12,4 +12,4 @@ Please open a private GitHub Security Advisory for this repository. Do not inclu
 
 ## Operational boundary
 
-The tool switches only the selected Mihomo `Selector` group. It does not edit subscription files or publish proxy credentials.
+The tool switches only the selected Mihomo `Selector` group through the standard Controller API. It does not edit subscription files, automate client GUIs, use root or AccessibilityService privileges, or publish proxy credentials.
