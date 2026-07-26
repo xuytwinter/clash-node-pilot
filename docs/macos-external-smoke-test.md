@@ -2,6 +2,8 @@
 
 Use this checklist with the `clash-node-pilot-macos-preview-zips` artifact produced by GitHub Actions.
 
+Chinese version: `docs/macos-external-smoke-test.zh-CN.md`.
+
 ## Install
 
 1. Choose the zip for the test machine:

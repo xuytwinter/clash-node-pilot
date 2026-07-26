@@ -2,6 +2,8 @@
 
 Use this checklist with the `clash-node-pilot-android-debug-apk` artifact produced by GitHub Actions.
 
+Chinese version: `docs/android-device-smoke-test.zh-CN.md`.
+
 ## Install
 
 1. Download the APK artifact from the CI run.
