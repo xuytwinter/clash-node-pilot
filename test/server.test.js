@@ -1,6 +1,27 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer } = require('../server');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'clash-node-pilot-test-'));
+process.env.APPDATA = path.join(sandbox, 'Roaming');
+process.env.LOCALAPPDATA = path.join(sandbox, 'Local');
+process.env.USERPROFILE = sandbox;
+process.env.HOME = sandbox;
+process.env.CLASH_PILOT_STATE = path.join(sandbox, 'explicit-state.json');
+process.env.CLASH_PILOT_DISABLE_AUTO_LOOP = '1';
+
+const {
+  parseConfig,
+  regionFor,
+  summarizeRegions,
+  mapLimit,
+  detectSelectedGroupFromBuffer,
+  resolvePilotDataDir,
+  resolveStatePath,
+  migrateLegacyState
+} = require('../server');
 
 test('parses controller config without requiring YAML dependency', () => {
   assert.deepEqual(parseConfig("external-controller: 127.0.0.1:9097\nsecret: 'abc'\n"), { controller: '127.0.0.1:9097', secret: 'abc' });
@@ -29,4 +50,37 @@ test('uses the latest Clash Verge UI selected group record', () => {
   const newRecord = Buffer.concat([key, Buffer.from('🚀节点选择', 'utf16le')]);
   const groups = [{ name: '🐟漏网之鱼' }, { name: '🚀节点选择' }];
   assert.equal(detectSelectedGroupFromBuffer(Buffer.concat([oldRecord, newRecord]), groups), '🚀节点选择');
+});
+test('state path honors CLASH_PILOT_STATE before LocalAppData default', () => {
+  const env = { LOCALAPPDATA: 'C:\\Temp\\Local', CLASH_PILOT_STATE: 'D:\\pilot\\state.json' };
+  assert.equal(resolveStatePath(env), path.resolve('D:\\pilot\\state.json'));
+  assert.equal(resolveStatePath({ LOCALAPPDATA: 'C:\\Temp\\Local' }), 'C:\\Temp\\Local\\ClashNodePilot\\state.json');
+  assert.equal(resolvePilotDataDir({ LOCALAPPDATA: 'C:\\Temp\\Local' }), 'C:\\Temp\\Local\\ClashNodePilot');
+});
+
+test('legacy repository state migrates once without deleting the old file', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'clash-node-pilot-migrate-'));
+  const legacy = path.join(base, 'repo', 'data', 'state.json');
+  const target = path.join(base, 'Local', 'ClashNodePilot', 'state.json');
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, '{"history":[{"ok":true}]}', 'utf8');
+  assert.equal(migrateLegacyState(target, legacy, { LOCALAPPDATA: path.join(base, 'Local') }), true);
+  assert.equal(fs.readFileSync(target, 'utf8'), '{"history":[{"ok":true}]}');
+  assert.equal(fs.existsSync(legacy), true);
+  fs.writeFileSync(target, '{"history":[]}', 'utf8');
+  assert.equal(migrateLegacyState(target, legacy, { LOCALAPPDATA: path.join(base, 'Local') }), false);
+  assert.equal(fs.readFileSync(target, 'utf8'), '{"history":[]}');
+});
+
+test('Windows launch scripts prefer bundled runtime and keep PATH fallback', () => {
+  const root = path.join(__dirname, '..');
+  const startCmd = fs.readFileSync(path.join(root, 'start-clash-node-pilot.cmd'), 'utf8');
+  const watchdog = fs.readFileSync(path.join(root, 'startup-watchdog.ps1'), 'utf8');
+  const install = fs.readFileSync(path.join(root, 'install-autostart.ps1'), 'utf8');
+  assert.match(startCmd, /runtime\\node\.exe/);
+  assert.match(startCmd, /set "NODE_EXE=node\.exe"/);
+  assert.match(watchdog, /runtime\\node\.exe/);
+  assert.match(watchdog, /Get-Command node\.exe/);
+  assert.match(install, /runtime\\node\.exe/);
+  assert.match(install, /Get-Command node\.exe/);
 });

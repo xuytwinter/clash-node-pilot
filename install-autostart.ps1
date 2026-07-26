@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$node = (Get-Command node.exe -ErrorAction Stop).Source
+$bundledNode = Join-Path $root 'runtime\node.exe'
+$node = if (Test-Path $bundledNode) { $bundledNode } else { (Get-Command node.exe -ErrorAction Stop).Source }
 $clash = 'C:\Program Files\Clash Verge\clash-verge.exe'
 $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 if (Test-Path $clash) { Set-ItemProperty -Path $runKey -Name 'Clash Verge' -Value "`"$clash`"" }

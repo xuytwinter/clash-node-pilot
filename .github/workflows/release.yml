@@ -1,0 +1,142 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          architecture: x64
+
+      - name: Validate versions
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') { throw "Invalid tag format: $tag" }
+          $version = $tag.Substring(1)
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($package.version -ne $version) { throw "package.json version $($package.version) does not match tag $tag" }
+
+      - name: Test and syntax check
+        shell: pwsh
+        run: |
+          npm test
+          node --check server.js
+          node --check public/app.js
+          $scripts = Get-ChildItem -Path . -Filter *.ps1
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { throw "PowerShell parse failed for $($script.Name): $($errors[0].Message)" }
+          }
+
+      - name: Build portable package
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.Substring(1)
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\release.ps1 -Version $version
+
+      - name: Verify package contents
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.Substring(1)
+          $zip = "outputs\clash-node-pilot-v$version-windows-x64-portable.zip"
+          $sha = "$zip.sha256"
+          if (-not (Test-Path $zip)) { throw "Missing zip: $zip" }
+          if (-not (Test-Path $sha)) { throw "Missing sha256: $sha" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
+          try {
+            $entries = $archive.Entries.FullName -replace '/', '\'
+            foreach ($required in @(
+              "clash-node-pilot-v$version-windows-x64\runtime\node.exe",
+              "clash-node-pilot-v$version-windows-x64\runtime\NODE-LICENSE",
+              "clash-node-pilot-v$version-windows-x64\runtime\NODE-RUNTIME.txt",
+              "clash-node-pilot-v$version-windows-x64\server.js",
+              "clash-node-pilot-v$version-windows-x64\public\index.html",
+              "clash-node-pilot-v$version-windows-x64\regions.json"
+            )) {
+              if ($entries -notcontains $required) { throw "Missing package entry: $required" }
+            }
+            foreach ($forbidden in @('.git\', '\test\', '\work\', '\data\', '\node_modules\', '.log', '.zip')) {
+              $bad = $entries | Where-Object { $_.Contains($forbidden) }
+              if ($bad) { throw "Forbidden package entry: $($bad[0])" }
+            }
+          } finally {
+            $archive.Dispose()
+          }
+          $expected = (Get-Content $sha).Split(' ')[0].ToLowerInvariant()
+          $actual = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          if ($expected -ne $actual) { throw 'Portable zip checksum mismatch' }
+
+      - name: Isolated portable smoke test
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.Substring(1)
+          $zip = Resolve-Path "outputs\clash-node-pilot-v$version-windows-x64-portable.zip"
+          $smokeRoot = Join-Path $env:RUNNER_TEMP 'clash pilot smoke path with spaces'
+          Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $smokeRoot | Out-Null
+          Expand-Archive -LiteralPath $zip -DestinationPath $smokeRoot -Force
+          $app = Join-Path $smokeRoot "clash-node-pilot-v$version-windows-x64"
+          $port = Get-Random -Minimum 40000 -Maximum 55000
+          $isolation = Join-Path $env:RUNNER_TEMP 'clash-pilot-isolated-profile'
+          New-Item -ItemType Directory -Path $isolation -Force | Out-Null
+          $env:PORT = "$port"
+          $env:APPDATA = Join-Path $isolation 'Roaming'
+          $env:LOCALAPPDATA = Join-Path $isolation 'Local'
+          $env:USERPROFILE = Join-Path $isolation 'User'
+          $env:HOME = Join-Path $isolation 'Home'
+          $env:CLASH_PILOT_STATE = Join-Path $isolation 'state.json'
+          $env:CLASH_PILOT_DISABLE_AUTO_LOOP = '1'
+          $process = Start-Process -FilePath (Join-Path $app 'runtime\node.exe') -ArgumentList @('server.js') -WorkingDirectory $app -WindowStyle Hidden -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(20)
+            do {
+              try {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -TimeoutSec 2
+                if ($health.ok -and $health.version -eq $version) { break }
+              } catch {}
+              Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $deadline)
+            if (-not $health.ok) { throw 'Isolated /api/health smoke test failed' }
+            $home = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 2
+            if ($home.StatusCode -ne 200) { throw 'Static page smoke test failed' }
+          } finally {
+            if ($process -and -not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clash-node-pilot-release-assets
+          path: |
+            outputs/*.zip
+            outputs/*.sha256
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.Substring(1)
+          gh release create '${{ github.ref_name }}' `
+            "outputs\clash-node-pilot-v$version-windows-x64-portable.zip" `
+            "outputs\clash-node-pilot-v$version-windows-x64-portable.zip.sha256" `
+            --title "Clash Node Pilot v$version Preview" `
+            --notes-file RELEASE_NOTES.md `
+            --latest

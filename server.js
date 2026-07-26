@@ -29,7 +29,20 @@ const TARGET_GROUP = process.env.CLASH_TARGET_GROUP || '🐟漏网之鱼';
 const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
-const STATE_PATH = process.env.CLASH_PILOT_STATE || path.join(__dirname, 'data', 'state.json');
+const LEGACY_STATE_PATH = path.join(__dirname, 'data', 'state.json');
+function resolvePilotDataDir(env = process.env) {
+  return path.join(env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'ClashNodePilot');
+}
+function resolveStatePath(env = process.env) {
+  return env.CLASH_PILOT_STATE ? path.resolve(env.CLASH_PILOT_STATE) : path.join(resolvePilotDataDir(env), 'state.json');
+}
+function migrateLegacyState(statePath = resolveStatePath(), legacyPath = LEGACY_STATE_PATH, env = process.env) {
+  if (env.CLASH_PILOT_STATE || fsSync.existsSync(statePath) || !fsSync.existsSync(legacyPath)) return false;
+  fsSync.mkdirSync(path.dirname(statePath), { recursive: true });
+  fsSync.copyFileSync(legacyPath, statePath);
+  return true;
+}
+const STATE_PATH = resolveStatePath();
 const runtime = { running: false, startedAt: null, history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
 
 function loadRuntimeState() {
@@ -56,6 +69,7 @@ function persistRuntimeState() {
   } catch { /* state persistence must not stop proxy switching */ }
 }
 
+migrateLegacyState();
 loadRuntimeState();
 
 let REGIONS = [
@@ -308,6 +322,15 @@ function sendJson(res, status, data) {
 }
 
 async function apiHandler(req, res, url) {
+  if (req.method === 'GET' && url.pathname === '/api/health') {
+    return sendJson(res, 200, {
+      ok: true,
+      name: 'Clash Node Pilot',
+      version: require('./package.json').version,
+      host: HOST,
+      port: PORT
+    });
+  }
   if (req.method === 'GET' && url.pathname === '/api/status') {
     const { groups, backend } = await inventory();
     const targetGroup = await pickPrimaryGroup(groups, backend);
@@ -470,10 +493,12 @@ const server = http.createServer(async (req, res) => {
 if (require.main === module) {
   server.listen(PORT, HOST, () => {
     console.log(`Clash Node Pilot: http://${HOST}:${PORT}`);
-    const runAutomaticCheck = () => fetch(`http://${HOST}:${PORT}/api/auto-optimize`, { method: 'POST' }).catch(() => {});
-    setTimeout(runAutomaticCheck, 10000);
-    setInterval(runAutomaticCheck, 15000);
+    if (process.env.CLASH_PILOT_DISABLE_AUTO_LOOP !== '1') {
+      const runAutomaticCheck = () => fetch(`http://${HOST}:${PORT}/api/auto-optimize`, { method: 'POST' }).catch(() => {});
+      setTimeout(runAutomaticCheck, 10000);
+      setInterval(runAutomaticCheck, 15000);
+    }
   });
 }
 
-module.exports = { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer };
+module.exports = { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer, resolvePilotDataDir, resolveStatePath, migrateLegacyState };

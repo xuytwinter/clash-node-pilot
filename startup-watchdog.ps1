@@ -1,11 +1,13 @@
 $ErrorActionPreference = 'SilentlyContinue'
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$dataDir = Join-Path $root 'data'
+$dataDir = Join-Path $env:LOCALAPPDATA 'ClashNodePilot'
+if (-not $env:LOCALAPPDATA) { $dataDir = Join-Path $env:USERPROFILE 'AppData\Local\ClashNodePilot' }
 $logPath = Join-Path $dataDir 'startup-watchdog.log'
 $clashExe = 'C:\Program Files\Clash Verge\clash-verge.exe'
 $configPath = Join-Path $env:APPDATA 'io.github.clash-verge-rev.clash-verge-rev\config.yaml'
-$nodeExe = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
+$bundledNode = Join-Path $root 'runtime\node.exe'
+$nodeExe = if (Test-Path $bundledNode) { $bundledNode } else { (Get-Command node.exe -ErrorAction SilentlyContinue).Source }
 $serverPath = Join-Path $root 'server.js'
 
 New-Item -ItemType Directory -Path $dataDir -Force | Out-Null

@@ -1,6 +1,6 @@
 {
-  "name": "clash-verge-fastest-node",
-  "version": "1.0.0",
+  "name": "clash-node-pilot",
+  "version": "0.1.0",
   "private": true,
   "description": "Local UI for testing and switching Clash Verge nodes by region",
   "license": "MIT",
