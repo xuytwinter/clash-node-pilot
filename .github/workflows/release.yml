@@ -158,7 +158,7 @@ jobs:
         shell: bash
         run: |
           VERSION='${{ github.ref_name }}'
-          VERSION="${VERSION#v}" ./release-macos.sh
+          VERSION="${VERSION#v}" bash ./release-macos.sh
 
       - name: Verify macOS package permissions
         shell: bash

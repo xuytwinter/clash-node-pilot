@@ -95,7 +95,7 @@ jobs:
 
       - name: Build macOS portable previews
         shell: bash
-        run: ./release-macos.sh
+        run: bash ./release-macos.sh
 
       - name: Verify macOS preview contents
         shell: bash
