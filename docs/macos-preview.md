@@ -22,6 +22,8 @@ Because the first macOS Preview is unsigned and not notarized, Gatekeeper may bl
 
 Release artifacts for macOS should be built on a macOS runner with `release-macos.sh` so the bundled `runtime/node` and launcher preserve executable permissions.
 
+For pre-release external testing without creating a GitHub Release, download the `clash-node-pilot-macos-preview-zips` CI artifact and follow `docs/macos-external-smoke-test.md`.
+
 ## Client Compatibility
 
 The preview tries documented local config locations for maintained macOS clients and then falls back to manual Controller pairing. Pairing accepts only explicit local Controller URLs such as `http://127.0.0.1:9097`.

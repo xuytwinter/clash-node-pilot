@@ -81,3 +81,45 @@ jobs:
           name: clash-node-pilot-android-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+  macos-preview-artifacts:
+    name: macOS preview artifacts
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Build macOS portable previews
+        shell: bash
+        run: ./release-macos.sh
+
+      - name: Verify macOS preview contents
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          for ARCH in arm64 x64; do
+            ZIP="outputs/clash-node-pilot-v$VERSION-darwin-$ARCH-portable.zip"
+            SHA="$ZIP.sha256"
+            test -f "$ZIP"
+            test -f "$SHA"
+            EXPECTED="$(awk '{print $1}' "$SHA")"
+            ACTUAL="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
+            test "$EXPECTED" = "$ACTUAL"
+            TMP="$(mktemp -d)"
+            unzip -q "$ZIP" -d "$TMP"
+            test -x "$TMP/clash-node-pilot-v$VERSION-darwin-$ARCH/runtime/node"
+            test -x "$TMP/clash-node-pilot-v$VERSION-darwin-$ARCH/start-clash-node-pilot.command"
+          done
+
+      - name: Upload macOS previews for external testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: clash-node-pilot-macos-preview-zips
+          path: |
+            outputs/*darwin-*.zip
+            outputs/*darwin-*.zip.sha256
+          if-no-files-found: error
