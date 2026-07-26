@@ -54,8 +54,8 @@ test('uses the latest Clash Verge UI selected group record', () => {
 test('state path honors CLASH_PILOT_STATE before LocalAppData default', () => {
   const env = { LOCALAPPDATA: 'C:\\Temp\\Local', CLASH_PILOT_STATE: 'D:\\pilot\\state.json' };
   assert.equal(resolveStatePath(env), path.resolve('D:\\pilot\\state.json'));
-  assert.equal(resolveStatePath({ LOCALAPPDATA: 'C:\\Temp\\Local' }), 'C:\\Temp\\Local\\ClashNodePilot\\state.json');
-  assert.equal(resolvePilotDataDir({ LOCALAPPDATA: 'C:\\Temp\\Local' }), 'C:\\Temp\\Local\\ClashNodePilot');
+  assert.equal(resolveStatePath({ LOCALAPPDATA: 'C:\\Temp\\Local' }), path.join('C:\\Temp\\Local', 'ClashNodePilot', 'state.json'));
+  assert.equal(resolvePilotDataDir({ LOCALAPPDATA: 'C:\\Temp\\Local' }), path.join('C:\\Temp\\Local', 'ClashNodePilot'));
 });
 
 test('legacy repository state migrates once without deleting the old file', () => {
