@@ -131,14 +131,7 @@ jobs:
           TMP="$(mktemp -d)"
           unzip -q "$ZIP" -d "$TMP"
           APP="$TMP/clash-node-pilot-v$VERSION-darwin-$ARCH"
-          PORT="$(python3 - <<'PY'
-import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-PY
-)"
+          PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
           ISO="$(mktemp -d)"
           LOG="$ISO/node-pilot.log"
           export PORT
