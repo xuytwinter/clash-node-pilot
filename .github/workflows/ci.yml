@@ -74,3 +74,10 @@ jobs:
       - name: Build debug APK
         shell: bash
         run: gradle -p android :app:assembleDebug
+
+      - name: Upload debug APK for device smoke testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: clash-node-pilot-android-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

@@ -99,6 +99,7 @@ This branch keeps the Windows v0.1.0 local API boundary while extracting shared 
 - Platform adapters: `src/platform` separates Windows discovery/startup behavior from macOS adapters, Keychain storage, LaunchAgent preview support, and manual local Controller pairing.
 - macOS Preview: see `docs/macos-preview.md`. Build signed/notarized distribution is not part of the first Preview; GitHub artifacts are unsigned portable zips for Apple Silicon and Intel.
 - Android companion: see `android/README.md`. The Android app is non-root, uses explicit pairing, stores secrets with Android Keystore-backed encryption, and runs automation only through a foreground service notification.
+- Android device testing: download the `clash-node-pilot-android-debug-apk` CI artifact and follow `docs/android-device-smoke-test.md`.
 - Compatibility: see `docs/compatibility-matrix.md`.
 
 Development and tests must use fake or isolated Controllers. Do not point automated tests at the user's active Windows Clash/Mihomo Controller.

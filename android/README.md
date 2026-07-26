@@ -34,3 +34,5 @@ Do not commit keystores, passwords, Controller secrets, subscription URLs, or ge
 ## Remaining Device Validation
 
 The code path still requires real Android validation for notification permission behavior, battery optimization prompts, reboot persistence, process death, and the exact pairing capability of the user's chosen Android Clash/Mihomo client.
+
+When GitHub Actions runs, download the `clash-node-pilot-android-debug-apk` artifact and follow `docs/android-device-smoke-test.md` on a real phone.
