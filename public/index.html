@@ -3,62 +3,105 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Clash 节点优选</title>
+  <title>Clash Node Pilot</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="mark">C</span><div><strong>节点优选</strong><span>Clash Verge 本地控制台</span></div></div>
-    <div class="header-actions"><button id="startupButton" class="startup-button" type="button">开机启动</button><a class="help-button" href="/guide.html" title="打开文档" aria-label="打开文档">文档</a><div id="connection" class="connection"><span></span>正在连接</div></div>
+    <div class="brand">
+      <span class="mark">NP</span>
+      <div>
+        <strong>Clash Node Pilot</strong>
+        <span>本地 Clash/Mihomo 节点优化器</span>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button id="startupButton" class="startup-button" type="button">开机启动</button>
+      <a class="help-button" href="/guide.html" title="打开文档" aria-label="打开文档">文档</a>
+      <div id="connection" class="connection"><span></span>连接中</div>
+    </div>
   </header>
+
   <main>
-    <section class="summary">
-      <div><p class="eyebrow">当前出口</p><h1 id="activeNode">读取中...</h1><p id="activeGroup" class="muted">正在读取 Mihomo 控制器</p></div>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">当前出口</p>
+        <h1 id="activeNode">正在读取...</h1>
+        <p id="activeGroup" class="muted">正在同步 Mihomo Controller</p>
+      </div>
       <button id="refreshButton" class="icon-button" title="刷新状态" aria-label="刷新状态">↻</button>
     </section>
 
     <section class="workspace">
-      <div class="controls">
-        <div class="control-heading"><label for="backendSelect">代理客户端</label><button id="settingsButton" class="settings-button" type="button"><span aria-hidden="true">⚙</span>自动测速设置</button></div>
+      <aside class="controls">
+        <div class="control-heading">
+          <label for="backendSelect">客户端</label>
+          <button id="settingsButton" class="settings-button" type="button">自动设置</button>
+        </div>
         <select id="backendSelect"></select>
-        <p id="clientInfo" class="automation-status"></p>
-        <label for="groupSelect">切换代理组</label>
+        <p id="clientInfo" class="hint"></p>
+
+        <label for="groupSelect">代理组</label>
         <select id="groupSelect"></select>
+
         <label>目标地区</label>
         <div id="regions" class="regions" role="radiogroup"></div>
-        <div class="settings-row">
+
+        <div class="switch-row">
           <label class="check"><input id="autoSwitch" type="checkbox" checked><span>测速后自动切换</span></label>
         </div>
-        <div class="settings-row">
+        <div class="switch-row">
           <label class="check"><input id="monitorOnly" type="checkbox"><span>仅监控，不切换</span></label>
           <button id="lockButton" class="text-button" type="button">锁定 15 分钟</button>
         </div>
-        <dialog id="settingsDialog" class="settings-dialog">
-          <div class="dialog-heading"><div><p class="eyebrow">节点优选</p><h2>自动测速设置</h2></div><button id="closeSettings" class="icon-button" type="button" aria-label="关闭设置">×</button></div>
-          <div class="dialog-fields">
-            <label for="autoInterval">自动测速间隔（分钟）</label><input id="autoInterval" type="number" min="1" max="60" step="1">
-            <label for="testUrl">测速地址</label><input id="testUrl" type="url">
-            <label for="timeout">超时（毫秒）</label><input id="timeout" type="number" min="1000" max="10000" step="500">
-            <label for="switchThreshold">自动切换至少快多少（毫秒）</label><input id="switchThreshold" type="number" min="0" max="500" step="5">
-            <label for="samples">每个节点测速次数</label><input id="samples" type="number" min="1" max="5">
-            <label for="pauseMinutes">手动切换后暂停自动优化（分钟）</label><input id="pauseMinutes" type="number" min="1" max="1440">
-          </div>
-          <div class="dialog-actions"><button id="cancelSettings" class="secondary" type="button">取消</button><button id="saveSettings" class="primary compact" type="button">保存设置</button></div>
-        </dialog>
-        <button id="optimizeButton" class="primary" disabled><span class="bolt">⚡</span><span>开始测速并优选</span></button>
-        <p id="message" class="message" aria-live="polite"></p>
-        <p id="automationStatus" class="automation-status">自动任务状态读取中...</p>
-      </div>
 
-      <div class="results-panel">
-        <div class="panel-heading"><div><p class="eyebrow">本次测速</p><h2>节点排名</h2></div><span id="resultCount" class="count">尚未测速</span></div>
+        <button id="optimizeButton" class="primary" disabled><span>开始测速并优化</span></button>
+        <p id="message" class="message" aria-live="polite"></p>
+        <p id="automationStatus" class="automation-status">正在读取自动任务状态...</p>
+      </aside>
+
+      <section class="results-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">测速结果</p>
+            <h2>节点排名</h2>
+          </div>
+          <span id="resultCount" class="count">尚未测速</span>
+        </div>
         <div id="trendHeading" class="trend-heading" hidden>最近延迟趋势</div>
         <div id="trend" class="trend" aria-label="最近延迟趋势"></div>
-        <div id="empty" class="empty"><div class="signal">⌁</div><strong>尚未开始测速</strong><span>选择地区后，点击“开始测速并优选”查看节点排名</span></div>
+        <div id="empty" class="empty">
+          <div class="signal">⌁</div>
+          <strong>等待测速</strong>
+          <span>选择代理组和地区后，开始一次安全的本地测速。</span>
+        </div>
         <div id="results" class="results"></div>
-      </div>
+      </section>
     </section>
   </main>
+
+  <dialog id="settingsDialog" class="settings-dialog">
+    <div class="dialog-heading">
+      <div>
+        <p class="eyebrow">自动优化</p>
+        <h2>测速与保护设置</h2>
+      </div>
+      <button id="closeSettings" class="icon-button" type="button" aria-label="关闭设置">×</button>
+    </div>
+    <div class="dialog-fields">
+      <label for="autoInterval">自动测速间隔（分钟）</label><input id="autoInterval" type="number" min="1" max="60" step="1">
+      <label for="testUrl">测速地址</label><input id="testUrl" type="url">
+      <label for="timeout">超时（毫秒）</label><input id="timeout" type="number" min="1000" max="10000" step="500">
+      <label for="switchThreshold">切换阈值（毫秒）</label><input id="switchThreshold" type="number" min="0" max="500" step="5">
+      <label for="samples">每个节点采样次数</label><input id="samples" type="number" min="1" max="5">
+      <label for="pauseMinutes">手动切换保护（分钟）</label><input id="pauseMinutes" type="number" min="1" max="1440">
+    </div>
+    <div class="dialog-actions">
+      <button id="cancelSettings" class="secondary" type="button">取消</button>
+      <button id="saveSettings" class="primary compact" type="button">保存设置</button>
+    </div>
+  </dialog>
+
   <script src="/app.js" defer></script>
 </body>
 </html>
