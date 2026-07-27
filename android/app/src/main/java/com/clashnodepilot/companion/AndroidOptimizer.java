@@ -29,12 +29,14 @@ final class AndroidOptimizer {
         final int groupCount;
         final int candidateCount;
         final String current;
+        final List<RegionSummary> regions;
 
-        Inspection(String groupName, int groupCount, int candidateCount, String current) {
+        Inspection(String groupName, int groupCount, int candidateCount, String current, List<RegionSummary> regions) {
             this.groupName = groupName;
             this.groupCount = groupCount;
             this.candidateCount = candidateCount;
             this.current = current;
+            this.regions = regions;
         }
     }
 
@@ -46,8 +48,9 @@ final class AndroidOptimizer {
         final int tested;
         final int failed;
         final boolean switched;
+        final List<NodeResult> rankings;
 
-        Result(String groupName, String previous, String bestName, int bestDelay, int tested, int failed, boolean switched) {
+        Result(String groupName, String previous, String bestName, int bestDelay, int tested, int failed, boolean switched, List<NodeResult> rankings) {
             this.groupName = groupName;
             this.previous = previous;
             this.bestName = bestName;
@@ -55,6 +58,35 @@ final class AndroidOptimizer {
             this.tested = tested;
             this.failed = failed;
             this.switched = switched;
+            this.rankings = rankings;
+        }
+    }
+
+    static final class RegionSummary {
+        final String id;
+        final String label;
+        final int count;
+
+        RegionSummary(String id, String label, int count) {
+            this.id = id;
+            this.label = label;
+            this.count = count;
+        }
+    }
+
+    static final class NodeResult {
+        final String name;
+        final int delay;
+        final boolean ok;
+        final boolean best;
+        final boolean activeBefore;
+
+        NodeResult(String name, int delay, boolean ok, boolean best, boolean activeBefore) {
+            this.name = name;
+            this.delay = delay;
+            this.ok = ok;
+            this.best = best;
+            this.activeBefore = activeBefore;
         }
     }
 
@@ -86,8 +118,8 @@ final class AndroidOptimizer {
         JSONObject proxies = new JSONObject(client.get("/proxies")).getJSONObject("proxies");
         List<SelectorGroup> groups = selectorGroups(proxies);
         SelectorGroup group = chooseGroup(groups, preferredGroup);
-        if (group == null) return new Inspection("", groups.size(), 0, "");
-        return new Inspection(group.name, groups.size(), filteredMembers(group, nodeFilter).size(), group.current);
+        if (group == null) return new Inspection("", groups.size(), 0, "", new ArrayList<>());
+        return new Inspection(group.name, groups.size(), filteredMembers(group, nodeFilter).size(), group.current, summarizeRegions(group.members));
     }
 
     static Result optimize(ControllerClient client, String preferredGroup, String nodeFilter) throws Exception {
@@ -115,7 +147,16 @@ final class AndroidOptimizer {
         if (switched) {
             client.putJson("/proxies/" + encode(group.name), "{\"name\":\"" + jsonEscape(best.name) + "\"}");
         }
-        return new Result(group.name, group.current, best.name, best.delay, members.size(), failed, switched);
+        results.sort((left, right) -> {
+            if (left.ok != right.ok) return left.ok ? -1 : 1;
+            if (!left.ok) return left.name.compareToIgnoreCase(right.name);
+            return Integer.compare(left.delay, right.delay);
+        });
+        List<NodeResult> rankings = new ArrayList<>();
+        for (DelayResult item : results) {
+            rankings.add(new NodeResult(item.name, item.delay, item.ok, item.ok && item.name.equals(best.name), item.name.equals(group.current)));
+        }
+        return new Result(group.name, group.current, best.name, best.delay, members.size(), failed, switched, rankings);
     }
 
     private static List<SelectorGroup> selectorGroups(JSONObject proxies) throws Exception {
@@ -161,13 +202,73 @@ final class AndroidOptimizer {
     }
 
     private static List<String> filteredMembers(SelectorGroup group, String nodeFilter) {
-        String filter = normalize(nodeFilter);
+        String filter = normalizeCompact(nodeFilter);
         if (filter.isEmpty()) return new ArrayList<>(group.members);
+        String[] aliases = aliasesFor(filter);
         List<String> members = new ArrayList<>();
         for (String member : group.members) {
-            if (normalize(member).contains(filter)) members.add(member);
+            String normalized = normalizeCompact(member);
+            for (String alias : aliases) {
+                if (normalized.contains(alias)) {
+                    members.add(member);
+                    break;
+                }
+            }
         }
         return members;
+    }
+
+    private static List<RegionSummary> summarizeRegions(List<String> members) {
+        List<RegionSummary> regions = new ArrayList<>();
+        addRegion(regions, "hk", "香港", members);
+        addRegion(regions, "jp", "日本", members);
+        addRegion(regions, "sg", "新加坡", members);
+        addRegion(regions, "us", "美国", members);
+        return regions;
+    }
+
+    private static void addRegion(List<RegionSummary> regions, String id, String label, List<String> members) {
+        int count = 0;
+        String[] aliases = aliasesFor(id);
+        for (String member : members) {
+            String normalized = normalizeCompact(member);
+            for (String alias : aliases) {
+                if (normalized.contains(alias)) {
+                    count++;
+                    break;
+                }
+            }
+        }
+        regions.add(new RegionSummary(id, label, count));
+    }
+
+    private static String[] aliasesFor(String filter) {
+        switch (filter) {
+            case "hk":
+            case "hongkong":
+            case "香港":
+            case "港":
+                return new String[]{"hk", "hkg", "hongkong", "香港", "港"};
+            case "jp":
+            case "japan":
+            case "日本":
+            case "日":
+                return new String[]{"jp", "japan", "tokyo", "osaka", "日本", "东京", "東京", "大阪"};
+            case "sg":
+            case "singapore":
+            case "新加坡":
+            case "狮城":
+                return new String[]{"sg", "sin", "singapore", "新加坡", "狮城", "獅城"};
+            case "us":
+            case "usa":
+            case "america":
+            case "美国":
+            case "美國":
+            case "美":
+                return new String[]{"usa", "america", "unitedstates", "losangeles", "sanjose", "newyork", "美国", "美國", "美"};
+            default:
+                return new String[]{filter};
+        }
     }
 
     private static DelayResult measure(ControllerClient client, String name) {
@@ -194,5 +295,9 @@ final class AndroidOptimizer {
 
     private static String normalize(String value) {
         return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static String normalizeCompact(String value) {
+        return normalize(value).replace(" ", "").replace("_", "").replace("-", "");
     }
 }

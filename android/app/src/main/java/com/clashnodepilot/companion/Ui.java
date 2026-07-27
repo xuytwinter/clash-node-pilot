@@ -3,6 +3,7 @@ package com.clashnodepilot.companion;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -16,6 +17,9 @@ final class Ui {
     private static final int TEXT = Color.rgb(20, 27, 38);
     private static final int MUTED = Color.rgb(92, 104, 121);
     private static final int BLUE = Color.rgb(37, 99, 235);
+    private static final int GREEN = Color.rgb(5, 150, 105);
+    private static final int RED = Color.rgb(220, 38, 38);
+    private static final int BORDER = Color.rgb(221, 226, 235);
 
     static ScrollView root(MainActivity activity) {
         ScrollView scroll = new ScrollView(activity);
@@ -38,6 +42,12 @@ final class Ui {
         return row;
     }
 
+    static LinearLayout card(Context context) {
+        LinearLayout card = column(context, 14);
+        card.setBackground(rounded(context, SURFACE, BORDER, 10));
+        return card;
+    }
+
     static TextView title(MainActivity activity, String text) {
         TextView view = text(activity, text, 24, TEXT);
         view.setTypeface(Typeface.DEFAULT_BOLD);
@@ -57,10 +67,24 @@ final class Ui {
         return view;
     }
 
+    static TextView caption(MainActivity activity, String text) {
+        TextView view = text(activity, text, 12, MUTED);
+        view.setLineSpacing(0, 1.1f);
+        return view;
+    }
+
+    static TextView metric(MainActivity activity, String text) {
+        TextView view = text(activity, text, 13, TEXT);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setPadding(dp(activity, 10), dp(activity, 8), dp(activity, 10), dp(activity, 8));
+        view.setBackground(rounded(activity, Color.rgb(241, 245, 249), BORDER, 8));
+        return view;
+    }
+
     static TextView status(MainActivity activity) {
         TextView view = text(activity, "", 14, TEXT);
         view.setPadding(dp(activity, 12), dp(activity, 10), dp(activity, 12), dp(activity, 10));
-        view.setBackgroundColor(Color.rgb(232, 238, 252));
+        view.setBackground(rounded(activity, Color.rgb(232, 238, 252), Color.rgb(190, 208, 252), 10));
         return view;
     }
 
@@ -79,15 +103,37 @@ final class Ui {
     static Button primaryButton(MainActivity activity, String text) {
         Button button = button(activity, text);
         button.setTextColor(Color.WHITE);
-        button.setBackgroundColor(BLUE);
+        button.setBackground(rounded(activity, BLUE, BLUE, 10));
         return button;
     }
 
     static Button secondaryButton(MainActivity activity, String text) {
         Button button = button(activity, text);
         button.setTextColor(TEXT);
-        button.setBackgroundColor(SURFACE);
+        button.setBackground(rounded(activity, SURFACE, BORDER, 10));
         return button;
+    }
+
+    static Button chipButton(MainActivity activity, String text) {
+        Button button = button(activity, text);
+        button.setTextColor(TEXT);
+        button.setTextSize(13);
+        button.setMinHeight(dp(activity, 40));
+        button.setBackground(rounded(activity, Color.rgb(241, 245, 249), BORDER, 999));
+        return button;
+    }
+
+    static TextView resultName(MainActivity activity, String text, boolean best) {
+        TextView view = text(activity, text, 14, TEXT);
+        view.setTypeface(best ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        return view;
+    }
+
+    static TextView delay(MainActivity activity, String text, boolean ok, boolean best) {
+        TextView view = text(activity, text, 14, ok ? (best ? GREEN : TEXT) : RED);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setGravity(android.view.Gravity.END);
+        return view;
     }
 
     static void add(LinearLayout parent, View child) {
@@ -100,6 +146,12 @@ final class Ui {
 
     static void addWeighted(LinearLayout parent, View child) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+        params.setMargins(dp(parent.getContext(), 3), dp(parent.getContext(), 4), dp(parent.getContext(), 3), dp(parent.getContext(), 4));
+        parent.addView(child, params);
+    }
+
+    static void addWeighted(LinearLayout parent, View child, float weight) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight);
         params.setMargins(dp(parent.getContext(), 3), dp(parent.getContext(), 4), dp(parent.getContext(), 3), dp(parent.getContext(), 4));
         parent.addView(child, params);
     }
@@ -123,5 +175,13 @@ final class Ui {
         button.setTextSize(14);
         button.setMinHeight(dp(activity, 46));
         return button;
+    }
+
+    private static GradientDrawable rounded(Context context, int fill, int stroke, int radiusDp) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fill);
+        drawable.setCornerRadius(dp(context, radiusDp));
+        drawable.setStroke(1, stroke);
+        return drawable;
     }
 }

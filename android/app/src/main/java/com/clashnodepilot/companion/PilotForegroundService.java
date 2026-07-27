@@ -43,12 +43,12 @@ public final class PilotForegroundService extends Service {
         }
         if (intent != null && PairingStore.ACTION_STOP.equals(intent.getAction())) {
             handler.removeCallbacks(poller);
-            updateNotification("Automatic optimization stopped.");
+            updateNotification("后台节点优选已停止。");
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf();
             return START_NOT_STICKY;
         }
-        startForeground(NOTIFICATION_ID, notification("Node Pilot is optimizing the paired local Controller."));
+        startForeground(NOTIFICATION_ID, notification("正在为已配对的本机 Controller 执行节点优选。"));
         handler.removeCallbacks(poller);
         handler.post(poller);
         return START_STICKY;
@@ -67,7 +67,7 @@ public final class PilotForegroundService extends Service {
 
     private void runHealthCheck() {
         if (!store.isPaired()) {
-            updateNotification("Pairing required. Automation stopped.");
+            updateNotification("需要先配对 Controller，后台节点优选已停止。");
             stopSelf();
             return;
         }
@@ -78,12 +78,12 @@ public final class PilotForegroundService extends Service {
                 ControllerClient client = new ControllerClient(store.controllerUrl(), store.secret());
                 AndroidOptimizer.Result result = AndroidOptimizer.optimize(client, store.targetGroup(), store.nodeFilter());
                 if (result.switched) {
-                    updateNotification("Switched " + result.groupName + " to " + result.bestName + " (" + result.bestDelay + " ms).");
+                    updateNotification("已将 " + result.groupName + " 切到最快节点：" + result.bestName + "（" + result.bestDelay + " ms）。");
                 } else {
-                    updateNotification("Best node already active: " + result.bestName + " (" + result.bestDelay + " ms).");
+                    updateNotification("当前已是最快节点：" + result.bestName + "（" + result.bestDelay + " ms）。");
                 }
             } catch (Exception error) {
-                updateNotification("Optimization skipped: " + error.getMessage());
+                updateNotification("本轮节点优选跳过：" + error.getMessage());
             } finally {
                 optimizing = false;
             }
@@ -111,6 +111,6 @@ public final class PilotForegroundService extends Service {
     private void ensureChannel() {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager manager = getSystemService(NotificationManager.class);
-        manager.createNotificationChannel(new NotificationChannel(CHANNEL_ID, "Node Pilot status", NotificationManager.IMPORTANCE_LOW));
+        manager.createNotificationChannel(new NotificationChannel(CHANNEL_ID, "节点优选状态", NotificationManager.IMPORTANCE_LOW));
     }
 }

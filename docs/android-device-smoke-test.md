@@ -19,15 +19,15 @@ Chinese version: `docs/android-device-smoke-test.zh-CN.md`.
 4. Enter the Controller secret only if the client requires one.
 5. Tap Probe and confirm that a Selector group and candidate count are shown.
 6. Tap Pair.
-7. Tap Optimize Now for a one-shot delay test and Selector switch.
-8. Tap Start Auto to keep the foreground service optimizing on its interval.
+7. Tap Start Speed Test And Select to run a one-shot node selection and Selector switch.
+8. Tap Enable Background Selection to keep the foreground service selecting nodes on its interval.
 
-Expected result: the app reports successful pairing, one-shot optimization either switches to the fastest node or says the fastest node is already active, and Start Auto shows a persistent foreground-service notification.
+Expected result: the app reports successful pairing, node selection either switches to the fastest node or says the fastest node is already active, and the result ranking lists each tested node with its delay. Background selection shows a persistent foreground-service notification.
 
 ## Smoke Cases
 
 - Controller reachable: Probe can read `/version` and `/proxies`.
-- Optimization: Optimize Now measures candidates and changes only a writable Selector group.
+- Node selection: Start Speed Test And Select measures candidates, shows a delay ranking, and changes only a writable Selector group.
 - Controller stopped: stop the Clash/Mihomo client; notification reports unavailable and performs no switching.
 - Pairing revoked: tap Revoke pairing; notification disappears and stored pairing state is cleared.
 - Process death: swipe the app away or let Android reclaim it; starting again should use the stored pairing without asking for the secret again.
