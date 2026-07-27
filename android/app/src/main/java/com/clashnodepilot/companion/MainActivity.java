@@ -2,11 +2,14 @@ package com.clashnodepilot.companion;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.InputType;
+import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -28,13 +31,22 @@ public final class MainActivity extends Activity {
     private EditText secret;
     private EditText targetGroup;
     private EditText nodeFilter;
+    private EditText autoInterval;
     private TextView resultSummary;
     private LinearLayout resultsList;
+    private LinearLayout pairingPanel;
+    private LinearLayout optimizerPanel;
+    private LinearLayout resultPanel;
+    private Button pairingTab;
+    private Button optimizerTab;
+    private Button resultTab;
     private Button regionAll;
     private Button regionHk;
     private Button regionJp;
     private Button regionSg;
     private Button regionUs;
+    private String lastReportTitle = "状态报告";
+    private String lastReportText = "还没有报告。";
     private ExternalClashApp clashApp;
 
     @Override
@@ -62,8 +74,25 @@ public final class MainActivity extends Activity {
         Ui.add(layout, Ui.title(this, "Clash Node Pilot"));
         Ui.add(layout, Ui.body(this, "Android 节点优选伴侣"));
 
+        LinearLayout statusRow = Ui.row(this);
         status = Ui.status(this);
-        Ui.add(layout, status);
+        Button reportButton = Ui.secondaryButton(this, "查看报告");
+        Ui.addWeighted(statusRow, status, 2.3f);
+        Ui.addWeighted(statusRow, reportButton, 1.0f);
+        Ui.add(layout, statusRow);
+
+        LinearLayout tabRow = Ui.row(this);
+        pairingTab = Ui.chipButton(this, "配对");
+        optimizerTab = Ui.chipButton(this, "优选");
+        resultTab = Ui.chipButton(this, "结果");
+        Ui.addWeighted(tabRow, pairingTab);
+        Ui.addWeighted(tabRow, optimizerTab);
+        Ui.addWeighted(tabRow, resultTab);
+        Ui.add(layout, tabRow);
+
+        pairingPanel = Ui.column(this, 0);
+        optimizerPanel = Ui.column(this, 0);
+        resultPanel = Ui.column(this, 0);
 
         LinearLayout clientCard = Ui.card(this);
         Ui.add(clientCard, Ui.sectionTitle(this, "客户端"));
@@ -79,7 +108,7 @@ public final class MainActivity extends Activity {
         Ui.addWeighted(clientRow, startClient);
         Ui.addWeighted(clientRow, stopClient);
         Ui.add(clientCard, clientRow);
-        Ui.add(layout, clientCard);
+        Ui.add(pairingPanel, clientCard);
 
         LinearLayout controllerCard = Ui.card(this);
         Ui.add(controllerCard, Ui.sectionTitle(this, "Controller 配对"));
@@ -95,7 +124,7 @@ public final class MainActivity extends Activity {
         Ui.addWeighted(controllerRow, probe);
         Ui.addWeighted(controllerRow, pair);
         Ui.add(controllerCard, controllerRow);
-        Ui.add(layout, controllerCard);
+        Ui.add(pairingPanel, controllerCard);
 
         LinearLayout optimizerCard = Ui.card(this);
         Ui.add(optimizerCard, Ui.sectionTitle(this, "节点优选"));
@@ -106,6 +135,10 @@ public final class MainActivity extends Activity {
         nodeFilter.setText(store.nodeFilter());
         Ui.add(optimizerCard, targetGroup);
         Ui.add(optimizerCard, nodeFilter);
+        autoInterval = Ui.input(this, "后台优选间隔（分钟，1-60）");
+        autoInterval.setInputType(InputType.TYPE_CLASS_NUMBER);
+        autoInterval.setText(String.valueOf(store.autoIntervalMinutes()));
+        Ui.add(optimizerCard, autoInterval);
         LinearLayout regionRowA = Ui.row(this);
         regionAll = Ui.chipButton(this, "全部");
         regionHk = Ui.chipButton(this, "香港");
@@ -135,7 +168,7 @@ public final class MainActivity extends Activity {
         Ui.addWeighted(stopRow, revoke);
         Ui.add(optimizerCard, stopRow);
         Ui.add(optimizerCard, Ui.caption(this, "节点优选只通过标准 Clash/Mihomo Controller API 切换 Selector，不使用 root、ADB 或修改 Clash Meta 私有文件。"));
-        Ui.add(layout, optimizerCard);
+        Ui.add(optimizerPanel, optimizerCard);
 
         LinearLayout resultCard = Ui.card(this);
         Ui.add(resultCard, Ui.sectionTitle(this, "测速结果"));
@@ -143,8 +176,16 @@ public final class MainActivity extends Activity {
         Ui.add(resultCard, resultSummary);
         resultsList = Ui.column(this, 0);
         Ui.add(resultCard, resultsList);
-        Ui.add(layout, resultCard);
+        Ui.add(resultPanel, resultCard);
 
+        Ui.add(layout, pairingPanel);
+        Ui.add(layout, optimizerPanel);
+        Ui.add(layout, resultPanel);
+
+        reportButton.setOnClickListener(view -> showReport(lastReportTitle, lastReportText));
+        pairingTab.setOnClickListener(view -> showPanel(pairingPanel));
+        optimizerTab.setOnClickListener(view -> showPanel(optimizerPanel));
+        resultTab.setOnClickListener(view -> showPanel(resultPanel));
         refreshClient.setOnClickListener(view -> {
             clashApp = ExternalClashApp.detect(this);
             refreshClientSummary();
@@ -166,6 +207,7 @@ public final class MainActivity extends Activity {
         revoke.setOnClickListener(view -> revokePairing());
 
         setContentView(root);
+        showPanel(store.isPaired() ? optimizerPanel : pairingPanel);
     }
 
     private void refreshClientSummary() {
@@ -176,10 +218,53 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void showPanel(LinearLayout selected) {
+        pairingPanel.setVisibility(selected == pairingPanel ? View.VISIBLE : View.GONE);
+        optimizerPanel.setVisibility(selected == optimizerPanel ? View.VISIBLE : View.GONE);
+        resultPanel.setVisibility(selected == resultPanel ? View.VISIBLE : View.GONE);
+        pairingTab.setEnabled(selected != pairingPanel);
+        optimizerTab.setEnabled(selected != optimizerPanel);
+        resultTab.setEnabled(selected != resultPanel);
+    }
+
+    private void showReport(String title, String text) {
+        lastReportTitle = title;
+        lastReportText = text;
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(text)
+                .setPositiveButton("知道了", null)
+                .show();
+    }
+
+    private void updateReport(String title, String text) {
+        lastReportTitle = title;
+        lastReportText = text;
+    }
+
+    private int currentAutoIntervalMinutes() {
+        try {
+            int minutes = Integer.parseInt(autoInterval.getText().toString().trim());
+            int normalized = PairingStore.normalizeAutoIntervalMinutes(minutes);
+            autoInterval.setText(String.valueOf(normalized));
+            return normalized;
+        } catch (Exception error) {
+            autoInterval.setText(String.valueOf(store.autoIntervalMinutes()));
+            return store.autoIntervalMinutes();
+        }
+    }
+
+    private void saveCurrentSettings(String controllerUrl, String secretValue, String groupValue, String filterValue) throws Exception {
+        store.save(controllerUrl, secretValue, groupValue, filterValue);
+        store.saveAutoIntervalMinutes(currentAutoIntervalMinutes());
+    }
+
     private void setRegionFilter(String filter, String label) {
         nodeFilter.setText(filter);
         clearResults();
-        updateStatus("目标地区已切换为：" + label + "。点击“开始测速并优选”即可测速并切到最快节点。");
+        String text = "目标地区已切换为：" + label + "。点击“开始测速并优选”即可测速并切到最快节点。";
+        updateStatus(text);
+        updateReport("目标地区", text);
     }
 
     private void clearResults() {
@@ -234,12 +319,16 @@ public final class MainActivity extends Activity {
 
     private void openClient() {
         if (clashApp == null) {
-            updateStatus("没有检测到已知 Clash Meta 客户端。");
+            String text = "没有检测到已知 Clash Meta 客户端。";
+            updateStatus(text);
+            showReport("客户端", text);
             return;
         }
         Intent intent = clashApp.launchIntent(this);
         if (intent == null) {
-            updateStatus("检测到客户端，但 Android 没有暴露可打开的 Activity。");
+            String text = "检测到客户端，但 Android 没有暴露可打开的 Activity。";
+            updateStatus(text);
+            showReport("客户端", text);
             return;
         }
         startActivity(intent);
@@ -247,46 +336,66 @@ public final class MainActivity extends Activity {
 
     private void sendClashAction(String action, String success) {
         if (clashApp == null) {
-            updateStatus("没有检测到 Clash Meta，无法发送官方外部控制 intent。");
+            String text = "没有检测到 Clash Meta，无法发送官方外部控制 intent。";
+            updateStatus(text);
+            showReport("客户端控制", text);
             return;
         }
         try {
             startActivity(clashApp.serviceIntent(action));
             updateStatus(success);
+            showReport("客户端控制", success);
         } catch (ActivityNotFoundException error) {
-            updateStatus("客户端没有为 " + action + " 暴露 ExternalControlActivity。");
+            String text = "客户端没有为 " + action + " 暴露 ExternalControlActivity。";
+            updateStatus(text);
+            showReport("客户端控制", text);
         } catch (Exception error) {
-            updateStatus("外部控制失败：" + error.getMessage());
+            String text = "外部控制失败：" + error.getMessage();
+            updateStatus(text);
+            showReport("客户端控制", text);
         }
     }
 
     private void pair(String controllerUrl, String secretValue, String groupValue, String filterValue) {
         try {
-            store.save(controllerUrl, secretValue, groupValue, filterValue);
-            updateStatus("已配对。Secret 使用 Android Keystore 加密保存。");
+            saveCurrentSettings(controllerUrl, secretValue, groupValue, filterValue);
+            String text = "已配对。Secret 使用 Android Keystore 加密保存。后台优选间隔：" + store.autoIntervalMinutes() + " 分钟。";
+            updateStatus(text);
+            showReport("配对成功", text);
+            showPanel(optimizerPanel);
         } catch (IllegalArgumentException error) {
-            updateStatus("Controller 必须是手机本机地址，例如 http://127.0.0.1:9097。");
+            String text = "Controller 必须是手机本机地址，例如 http://127.0.0.1:9097。";
+            updateStatus(text);
+            showReport("配对失败", text);
         } catch (Exception error) {
-            updateStatus("配对失败：" + error.getMessage());
+            String text = "配对失败：" + error.getMessage();
+            updateStatus(text);
+            showReport("配对失败", text);
         }
     }
 
     private void startPilotService() {
         try {
-            store.save(controller.getText().toString(), secret.getText().toString(), targetGroup.getText().toString(), nodeFilter.getText().toString());
+            saveCurrentSettings(controller.getText().toString(), secret.getText().toString(), targetGroup.getText().toString(), nodeFilter.getText().toString());
         } catch (Exception error) {
-            updateStatus("保存节点优选设置失败：" + error.getMessage());
+            String text = "保存节点优选设置失败：" + error.getMessage();
+            updateStatus(text);
+            showReport("后台优选", text);
             return;
         }
         Intent intent = new Intent(this, PilotForegroundService.class).setAction(PairingStore.ACTION_START);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
         else startService(intent);
-        updateStatus("已开启后台节点优选。系统通知会显示运行状态。");
+        String text = "已开启后台节点优选。系统通知会显示运行状态，每 " + store.autoIntervalMinutes() + " 分钟执行一轮。";
+        updateStatus(text);
+        showReport("后台优选已开启", text);
     }
 
     private void stopPilotService() {
         startService(new Intent(this, PilotForegroundService.class).setAction(PairingStore.ACTION_STOP));
-        updateStatus("已请求停止后台节点优选。");
+        String text = "已请求停止后台节点优选。配对信息仍会保留。";
+        updateStatus(text);
+        showReport("后台优选已停止", text);
     }
 
     private void revokePairing() {
@@ -296,7 +405,11 @@ public final class MainActivity extends Activity {
         secret.setText("");
         targetGroup.setText("");
         nodeFilter.setText("");
-        updateStatus("已撤销配对，本地状态已清除。");
+        autoInterval.setText(String.valueOf(store.autoIntervalMinutes()));
+        String text = "已撤销配对，本地状态已清除。";
+        updateStatus(text);
+        showReport("撤销配对", text);
+        showPanel(pairingPanel);
     }
 
     private void probe() {
@@ -314,14 +427,19 @@ public final class MainActivity extends Activity {
                             targetGroup.setText(inspection.groupName);
                         }
                         renderInspection(inspection);
-                        updateStatus("已找到 Controller：" + candidate + "；识别到 Selector 组 " + inspection.groupCount + " 个，可以开始节点优选。");
+                        String text = "已找到 Controller：" + candidate + "\nSelector 组：" + inspection.groupCount + " 个\n当前代理组：" + inspection.groupName + "\n候选节点：" + inspection.candidateCount + " 个";
+                        updateStatus("已找到 Controller，可以开始节点优选。");
+                        showReport("探测成功", text);
+                        showPanel(optimizerPanel);
                     });
                     return;
                 } catch (ControllerHttpException error) {
                     if (error.statusCode == 401) {
                         runOnUiThread(() -> {
                             controller.setText(candidate);
-                            updateStatus("找到 Controller，但需要 Secret：" + candidate);
+                            String text = "找到 Controller，但需要 Secret：" + candidate + "\n请填入 Clash Meta 里设置的 Secret 后重新探测。";
+                            updateStatus("找到 Controller，但需要 Secret。");
+                            showReport("需要 Secret", text);
                         });
                         return;
                     }
@@ -329,7 +447,11 @@ public final class MainActivity extends Activity {
                     /* try the next common local port */
                 }
             }
-            runOnUiThread(() -> updateStatus("没有找到 Controller。请确认 Clash Meta 的 Override Settings 已设置 external-controller，并重启 Clash 服务。只启动 VPN 不等于开放 Controller API。"));
+            runOnUiThread(() -> {
+                String text = "没有找到 Controller。\n\n请确认 Clash Meta 的 Override Settings 已设置 external-controller，并重启 Clash 服务。\n\n注意：只启动 VPN 不等于开放 Controller API。";
+                updateStatus("没有找到 Controller。");
+                showReport("探测失败", text);
+            });
         }).start();
     }
 
@@ -339,9 +461,11 @@ public final class MainActivity extends Activity {
             if (!store.isPaired()) return;
         } else {
             try {
-                store.save(controller.getText().toString(), secret.getText().toString(), targetGroup.getText().toString(), nodeFilter.getText().toString());
+                saveCurrentSettings(controller.getText().toString(), secret.getText().toString(), targetGroup.getText().toString(), nodeFilter.getText().toString());
             } catch (Exception error) {
-                updateStatus("保存节点优选设置失败：" + error.getMessage());
+                String text = "保存节点优选设置失败：" + error.getMessage();
+                updateStatus(text);
+                showReport("节点优选失败", text);
                 return;
             }
         }
@@ -353,17 +477,26 @@ public final class MainActivity extends Activity {
                 AndroidOptimizer.Result result = AndroidOptimizer.optimize(client, store.targetGroup(), store.nodeFilter());
                 runOnUiThread(() -> {
                     renderResults(result);
-                    updateStatus(result.switched
-                            ? "节点优选完成：已切换到 " + result.bestName + "，延迟 " + result.bestDelay + " ms。"
-                            : "节点优选完成：当前已是最快节点 " + result.bestName + "，延迟 " + result.bestDelay + " ms。");
+                    showPanel(resultPanel);
+                    String text = "代理组：" + result.groupName
+                            + "\n已测速：" + result.tested + " 个，失败：" + result.failed + " 个"
+                            + "\n最快节点：" + result.bestName + "（" + result.bestDelay + " ms）"
+                            + "\n切换结果：" + (result.switched ? "已自动切换" : "当前已是最快");
+                    updateStatus("节点优选完成：" + result.bestName + "（" + result.bestDelay + " ms）。");
+                    showReport("节点优选完成", text);
                 });
             } catch (Exception error) {
-                runOnUiThread(() -> updateStatus("节点优选失败：" + error.getMessage()));
+                runOnUiThread(() -> {
+                    String text = "节点优选失败：" + error.getMessage();
+                    updateStatus(text);
+                    showReport("节点优选失败", text);
+                });
             }
         }).start();
     }
 
     private void updateStatus(String text) {
         status.setText(text);
+        updateReport("状态报告", text);
     }
 }

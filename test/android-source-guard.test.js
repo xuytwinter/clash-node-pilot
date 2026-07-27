@@ -37,7 +37,12 @@ test('Android UI uses user-facing node selection language and result ranking', (
   assert.match(activity, /测速结果/);
   assert.match(activity, /regionHk|regionJp|regionSg|regionUs/);
   assert.match(activity, /renderResults\(AndroidOptimizer\.Result/);
+  assert.match(activity, /pairingPanel|optimizerPanel|resultPanel/);
+  assert.match(activity, /showReport\(String title, String text\)/);
+  assert.match(activity, /后台优选间隔/);
+  assert.match(activity, /saveAutoIntervalMinutes/);
   assert.match(service, /节点优选/);
+  assert.match(service, /store\.autoIntervalMs\(\)/);
   assert.match(optimizer, /List<NodeResult> rankings/);
   assert.doesNotMatch(activity, /自动优化|立即优化|启动自动|停止自动|保存优化|优化失败|优化设置/);
 });
@@ -46,13 +51,14 @@ test('Android app declares custom launcher and notification icons', () => {
   const manifest = source('android/app/src/main/AndroidManifest.xml');
   const service = source('android/app/src/main/java/com/clashnodepilot/companion/PilotForegroundService.java');
   const launcher = source('android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml');
-  const foreground = source('android/app/src/main/res/drawable/ic_launcher_foreground.xml');
   const stat = source('android/app/src/main/res/drawable/ic_stat_node_pilot.xml');
+  const foregroundPath = path.join(root, 'android/app/src/main/res/drawable-nodpi/ic_launcher_foreground.png');
   assert.match(manifest, /android:icon="@mipmap\/ic_launcher"/);
   assert.match(manifest, /android:roundIcon="@mipmap\/ic_launcher_round"/);
   assert.match(service, /R\.drawable\.ic_stat_node_pilot/);
   assert.match(launcher, /adaptive-icon/);
-  assert.match(foreground, /#2563EB/);
+  assert.match(launcher, /@drawable\/ic_launcher_foreground/);
+  assert.ok(fs.statSync(foregroundPath).size > 10000);
   assert.match(stat, /#FFFFFFFF/);
 });
 

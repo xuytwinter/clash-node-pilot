@@ -22,7 +22,7 @@ public final class PilotForegroundService extends Service {
         @Override
         public void run() {
             runHealthCheck();
-            handler.postDelayed(this, 180_000);
+            handler.postDelayed(this, store.autoIntervalMs());
         }
     };
 
@@ -48,7 +48,7 @@ public final class PilotForegroundService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
-        startForeground(NOTIFICATION_ID, notification("正在为已配对的本机 Controller 执行节点优选。"));
+        startForeground(NOTIFICATION_ID, notification("正在为已配对的本机 Controller 执行节点优选，每 " + store.autoIntervalMinutes() + " 分钟一轮。"));
         handler.removeCallbacks(poller);
         handler.post(poller);
         return START_STICKY;

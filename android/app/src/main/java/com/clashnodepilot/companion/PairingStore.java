@@ -20,6 +20,7 @@ final class PairingStore {
     static final String ACTION_REVOKE = "com.clashnodepilot.companion.REVOKE";
     private static final String PREFS = "pairing";
     private static final String KEY_ALIAS = "clash-node-pilot-controller";
+    private static final int DEFAULT_AUTO_INTERVAL_MINUTES = 3;
     private final SharedPreferences prefs;
 
     PairingStore(Context context) {
@@ -54,6 +55,18 @@ final class PairingStore {
         return prefs.getString("nodeFilter", "");
     }
 
+    int autoIntervalMinutes() {
+        return prefs.getInt("autoIntervalMinutes", DEFAULT_AUTO_INTERVAL_MINUTES);
+    }
+
+    long autoIntervalMs() {
+        return autoIntervalMinutes() * 60_000L;
+    }
+
+    void saveAutoIntervalMinutes(int minutes) {
+        prefs.edit().putInt("autoIntervalMinutes", normalizeAutoIntervalMinutes(minutes)).apply();
+    }
+
     String secret() throws Exception {
         String iv = prefs.getString("secretIv", "");
         String ciphertext = prefs.getString("secretCiphertext", "");
@@ -69,6 +82,12 @@ final class PairingStore {
 
     void revoke() {
         prefs.edit().clear().apply();
+    }
+
+    static int normalizeAutoIntervalMinutes(int minutes) {
+        if (minutes < 1) return 1;
+        if (minutes > 60) return 60;
+        return minutes;
     }
 
     static String validateLocalControllerUrl(String controllerUrl) {

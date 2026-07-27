@@ -8,7 +8,8 @@ This directory contains the native Android companion source for the first non-ro
 - One explicit pairing screen for a local Clash/Mihomo Controller URL and optional secret.
 - Secret storage uses Android Keystore-backed AES/GCM encryption with app-private SharedPreferences ciphertext.
 - A foreground service keeps a visible notification while it measures candidate nodes and switches the selected Selector through the standard Controller API.
-- Manual "节点优选" supports an optional target Selector group, quick region filters for Hong Kong, Japan, Singapore, and the United States, and a full per-node delay ranking before switching.
+- Manual "节点优选" supports an optional target Selector group, quick region filters for Hong Kong, Japan, Singapore, and the United States, a popup report, and a full per-node delay ranking before switching.
+- Background node selection uses a user-configurable interval from 1 to 60 minutes.
 - Boot and package-replaced receivers restart only after a pairing already exists.
 - Revoking pairing clears local pairing state and stops the foreground service.
 
