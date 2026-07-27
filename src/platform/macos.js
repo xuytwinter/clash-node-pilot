@@ -1,6 +1,10 @@
 const os = require('node:os');
+const fsSync = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const { CapabilityState, DiagnosticCode, createCapabilities, diagnostic } = require('../core/capabilities');
+
+const LAUNCH_AGENT_LABEL = 'com.clash-node-pilot.service';
 
 const MACOS_CLIENT_ADAPTERS = [
   {
@@ -45,18 +49,66 @@ function manualPairingBackend(pairing, secureStore) {
   };
 }
 
-function macosStartupStatus() {
+function macosLaunchAgentPath(env = process.env) {
+  return path.join(env.HOME || os.homedir(), 'Library', 'LaunchAgents', `${LAUNCH_AGENT_LABEL}.plist`);
+}
+
+function packagedNodePath(rootDir) {
+  const bundled = path.join(rootDir, 'runtime', 'node');
+  return fsSync.existsSync(bundled) ? bundled : process.execPath;
+}
+
+function macosStartupStatus({ platform = process.platform, env = process.env } = {}) {
+  const plistPath = macosLaunchAgentPath(env);
   return {
-    supported: process.platform === 'darwin',
-    enabled: false,
-    source: process.platform === 'darwin' ? 'launch-agent-preview' : null,
-    diagnostic: process.platform === 'darwin'
-      ? diagnostic(DiagnosticCode.OK, 'Use the generated LaunchAgent plist for the unsigned Preview.')
+    supported: platform === 'darwin',
+    enabled: platform === 'darwin' && fsSync.existsSync(plistPath),
+    source: platform === 'darwin' ? 'launch-agent-preview' : null,
+    plistPath: platform === 'darwin' ? plistPath : null,
+    diagnostic: platform === 'darwin'
+      ? diagnostic(DiagnosticCode.OK, 'LaunchAgent preview startup is managed in the current user session.')
       : diagnostic(DiagnosticCode.UNSUPPORTED_API, 'macOS LaunchAgent support is unavailable on this platform.')
   };
 }
 
-function createLaunchAgentPlist({ label = 'com.clash-node-pilot.service', programPath, workingDirectory, port = 3210 }) {
+function setMacosStartupEnabled(enabled, rootDir, { platform = process.platform, env = process.env, execFile = execFileSync, uid = process.getuid?.() } = {}) {
+  if (platform !== 'darwin') throw new Error('Startup management is currently available on macOS only');
+  if (uid === undefined || uid === null) throw new Error('macOS user session id is unavailable for LaunchAgent management');
+  const plistPath = macosLaunchAgentPath(env);
+  const target = `gui/${uid}/${LAUNCH_AGENT_LABEL}`;
+
+  if (!enabled) {
+    try {
+      execFile('launchctl', ['bootout', target], { stdio: 'ignore', timeout: 5000 });
+    } catch {
+      /* The agent may not be loaded in this user session. */
+    }
+    fsSync.rmSync(plistPath, { force: true });
+    return macosStartupStatus({ platform, env });
+  }
+
+  fsSync.mkdirSync(path.dirname(plistPath), { recursive: true });
+  fsSync.writeFileSync(plistPath, createLaunchAgentPlist({
+    programPath: packagedNodePath(rootDir),
+    workingDirectory: rootDir,
+    port: Number(env.PORT || 3210)
+  }), { encoding: 'utf8', mode: 0o644 });
+
+  try {
+    execFile('launchctl', ['bootout', target], { stdio: 'ignore', timeout: 5000 });
+  } catch {
+    /* Replace if absent or already unloaded. */
+  }
+  try {
+    execFile('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'ignore', timeout: 5000 });
+  } catch (error) {
+    fsSync.rmSync(plistPath, { force: true });
+    throw error;
+  }
+  return macosStartupStatus({ platform, env });
+}
+
+function createLaunchAgentPlist({ label = LAUNCH_AGENT_LABEL, programPath, workingDirectory, port = 3210 }) {
   const escapedProgram = escapeXml(programPath);
   const escapedWorkingDirectory = escapeXml(workingDirectory);
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -90,6 +142,8 @@ function escapeXml(value) {
 module.exports = {
   MACOS_CLIENT_ADAPTERS,
   createLaunchAgentPlist,
+  macosLaunchAgentPath,
   macosStartupStatus,
+  setMacosStartupEnabled,
   manualPairingBackend
 };

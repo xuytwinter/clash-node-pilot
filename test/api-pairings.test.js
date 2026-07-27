@@ -52,3 +52,34 @@ test('pairing API stores only non-secret metadata in runtime state', async () =>
     await close();
   }
 });
+
+test('status API returns diagnostics when no Controller is online', async () => {
+  const port = await listen();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/status`);
+    const status = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(status.connected, false);
+    assert.equal(status.backend, null);
+    assert.deepEqual(status.groups, []);
+    assert.equal(status.diagnostic.code, 'controller-unavailable');
+    assert.ok(Array.isArray(status.backends));
+  } finally {
+    await close();
+  }
+});
+
+test('local API rejects cross-origin write requests before touching Controller state', async () => {
+  const port = await listen();
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/auto-optimize`, {
+      method: 'POST',
+      headers: { Origin: 'https://example.com', 'Sec-Fetch-Site': 'cross-site' }
+    });
+    const body = await response.json();
+    assert.equal(response.status, 403);
+    assert.match(body.error, /Cross-origin/);
+  } finally {
+    await close();
+  }
+});

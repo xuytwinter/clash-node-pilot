@@ -5,8 +5,10 @@ import android.content.SharedPreferences;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import java.nio.charset.StandardCharsets;
+import java.net.URI;
 import java.security.KeyStore;
 import java.util.Base64;
+import java.util.Locale;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
@@ -25,12 +27,13 @@ final class PairingStore {
     }
 
     void save(String controllerUrl, String secret, String targetGroup, String nodeFilter) throws Exception {
+        String normalizedController = validateLocalControllerUrl(controllerUrl);
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey());
         byte[] iv = cipher.getIV();
-        byte[] ciphertext = cipher.doFinal(secret.getBytes(StandardCharsets.UTF_8));
+        byte[] ciphertext = cipher.doFinal((secret == null ? "" : secret).getBytes(StandardCharsets.UTF_8));
         prefs.edit()
-                .putString("controllerUrl", controllerUrl)
+                .putString("controllerUrl", normalizedController)
                 .putString("targetGroup", targetGroup == null ? "" : targetGroup.trim())
                 .putString("nodeFilter", nodeFilter == null ? "" : nodeFilter.trim())
                 .putString("secretIv", Base64.getEncoder().encodeToString(iv))
@@ -66,6 +69,36 @@ final class PairingStore {
 
     void revoke() {
         prefs.edit().clear().apply();
+    }
+
+    static String validateLocalControllerUrl(String controllerUrl) {
+        String value = controllerUrl == null ? "" : controllerUrl.trim();
+        try {
+            URI uri = new URI(value);
+            String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+            String host = uri.getHost();
+            String rawPath = uri.getRawPath();
+            int port = uri.getPort();
+            if (!("http".equals(scheme) || "https".equals(scheme))
+                    || !isPhoneLocalHost(host)
+                    || uri.getUserInfo() != null
+                    || (port != -1 && (port < 1 || port > 65535))
+                    || uri.getRawQuery() != null
+                    || uri.getRawFragment() != null
+                    || (rawPath != null && !rawPath.isEmpty() && !"/".equals(rawPath))) {
+                throw new IllegalArgumentException();
+            }
+            String normalizedHost = "::1".equals(host) || "[::1]".equals(host) ? "[::1]" : host.toLowerCase(Locale.ROOT);
+            return scheme + "://" + normalizedHost + (port == -1 ? "" : ":" + port);
+        } catch (Exception error) {
+            throw new IllegalArgumentException("Controller must be a phone-local URL such as http://127.0.0.1:9097.");
+        }
+    }
+
+    private static boolean isPhoneLocalHost(String host) {
+        if (host == null) return false;
+        String normalized = host.toLowerCase(Locale.ROOT);
+        return "127.0.0.1".equals(normalized) || "localhost".equals(normalized) || "::1".equals(normalized) || "[::1]".equals(normalized);
     }
 
     private SecretKey getOrCreateKey() throws Exception {

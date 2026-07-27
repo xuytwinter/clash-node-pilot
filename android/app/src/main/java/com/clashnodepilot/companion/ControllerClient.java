@@ -39,6 +39,7 @@ final class ControllerClient {
         connection.setConnectTimeout(2000);
         connection.setReadTimeout(7000);
         connection.setRequestProperty("Accept", "application/json");
+        if (!secret.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + secret);
         if (body != null) {
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             connection.setDoOutput(true);
@@ -48,7 +49,6 @@ final class ControllerClient {
                 output.write(bytes);
             }
         }
-        if (!secret.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + secret);
         int status = connection.getResponseCode();
         if (status == HttpURLConnection.HTTP_NO_CONTENT) return "";
         if (status >= 200 && status < 300 && connection.getInputStream() == null) return "";

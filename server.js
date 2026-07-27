@@ -4,38 +4,23 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
-const { ControllerClient, parseConfig: parseControllerConfig, probeConfigBackend } = require('./src/core/controller');
+const { ControllerClient, parseConfig: parseControllerConfig } = require('./src/core/controller');
 const { createRegionResolver, loadRegions, summarizeRegions: summarizeRegionCounts } = require('./src/core/regions');
 const optimizerCore = require('./src/core/optimizer');
 const { discoverBackends: discoverPlatformBackends } = require('./src/platform');
 const { createSecureStore } = require('./src/platform/secure-store');
 const windowsPlatform = require('./src/platform/windows');
+const { macosStartupStatus, setMacosStartupEnabled } = require('./src/platform/macos');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 3210);
 const STATIC_ROOT = path.join(__dirname, 'public');
-const VERGE_CONFIG_PATH = path.join(
-  process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
-  'io.github.clash-verge-rev.clash-verge-rev',
-  'config.yaml'
-);
-const CFW_CONFIG_PATH = path.join(os.homedir(), '.config', 'clash', 'config.yaml');
-const MIHOMO_BACKENDS = [
-  ...(process.env.CLASH_CONFIG ? [{ id: 'custom', name: 'Custom Clash/Mihomo', configPath: process.env.CLASH_CONFIG }] : []),
-  { id: 'clash-verge', name: 'Clash Verge Rev', configPath: VERGE_CONFIG_PATH },
-  { id: 'clash-for-windows', name: 'Clash for Windows', configPath: CFW_CONFIG_PATH }
-];
-const WEBVIEW_LEVELDB = path.join(
-  process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-  'io.github.clash-verge-rev.clash-verge-rev', 'EBWebView', 'Default', 'Local Storage', 'leveldb'
-);
+const WEBVIEW_LEVELDB = windowsPlatform.clashVergeLevelDbPath(process.env);
 const DEFAULT_TEST_URL = 'https://www.gstatic.com/generate_204';
 const VERIFY_TEST_URL = 'https://cp.cloudflare.com/generate_204';
 const TARGET_GROUP = process.env.CLASH_TARGET_GROUP || '🐟漏网之鱼';
 const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
-const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
 const LEGACY_STATE_PATH = path.join(__dirname, 'data', 'state.json');
 function resolvePilotDataDir(env = process.env) {
   return path.join(env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'ClashNodePilot');
@@ -53,6 +38,16 @@ const STATE_PATH = resolveStatePath();
 const secureStorePlatform = process.env.CLASH_PILOT_SECURE_STORE === 'file' ? 'test' : process.platform;
 const secureStore = createSecureStore({ platform: secureStorePlatform, dataDir: resolvePilotDataDir() });
 const runtime = { running: false, startedAt: null, history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, pairings: [], settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
+
+function manualPairingApiEnabled() {
+  return secureStore.backend !== 'local-profile-file' || process.env.CLASH_PILOT_SECURE_STORE === 'file';
+}
+
+function requireManualPairingApi() {
+  if (!manualPairingApiEnabled()) {
+    throw Object.assign(new Error('Manual Controller pairing requires an OS-backed secure store on this platform'), { status: 501 });
+  }
+}
 
 function loadRuntimeState() {
   try {
@@ -107,83 +102,37 @@ function regionFor(name) {
   return resolveRegion(name);
 }
 
-async function probeBackend(backend) {
-  return probeConfigBackend(backend);
-}
-
 async function discoverBackends() {
   return discoverPlatformBackends({ env: process.env, pairings: runtime.pairings, secureStore });
 }
 
-function discoverV2rayNHome() {
-  if (process.env.V2RAYN_HOME && fsSync.existsSync(path.join(process.env.V2RAYN_HOME, 'v2rayN.exe'))) return process.env.V2RAYN_HOME;
-  if (process.platform !== 'win32') return null;
-  try {
-    const executable = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(Get-Process v2rayN -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path)'], { encoding: 'utf8', timeout: 2000, windowsHide: true }).trim();
-    return executable ? path.dirname(executable) : null;
-  } catch { return null; }
-}
-
-function detectV2rayN() {
-  const home = discoverV2rayNHome();
-  if (!home) return { id: 'v2rayn', name: 'v2rayN', online: false, writable: false };
-  try {
-    const configPath = path.join(home, 'guiConfigs', 'guiNConfig.json');
-    const config = JSON.parse(fsSync.readFileSync(configPath, 'utf8'));
-    const result = { id: 'v2rayn', name: 'v2rayN', online: true, writable: false, mode: 'read-only' };
-    try {
-      const { DatabaseSync } = require('node:sqlite');
-      const database = new DatabaseSync(path.join(home, 'guiConfigs', 'guiNDB.db'), { readOnly: true });
-      const current = database.prepare('select p.Remarks as name, p.Subid as groupId, coalesce(e.Delay,0) as delay from ProfileItem p left join ProfileExItem e on e.IndexId=p.IndexId where p.IndexId=?').get(config.IndexId);
-      const count = database.prepare('select count(*) as count from ProfileItem').get().count;
-      database.close();
-      result.current = current ? { name: current.name, delay: current.delay } : null;
-      result.nodeCount = count;
-    } catch { result.current = null; }
-    return result;
-  } catch { return { id: 'v2rayn', name: 'v2rayN', online: true, writable: false, mode: 'read-only', error: 'Configuration could not be read' }; }
-}
-
 function startupStatus() {
-  if (process.platform !== 'win32') return { supported: false, enabled: false, source: null };
-  try {
-    execFileSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Clash Node Pilot Startup'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
-    execFileSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Clash Node Pilot Optimizer'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
-    return { supported: true, enabled: true, source: 'current-user' };
-  } catch { /* check elevated scheduled tasks next */ }
-  try {
-    execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot Startup'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
-    execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot Watchdog'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
-    execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot Optimizer'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
-    return { supported: true, enabled: true, source: 'scheduled-task' };
-  } catch { return { supported: true, enabled: false, source: null }; }
+  if (process.platform === 'win32') return windowsPlatform.startupStatus();
+  if (process.platform === 'darwin') return macosStartupStatus();
+  return { supported: false, enabled: false, source: null };
 }
 
 function setStartupEnabled(enabled) {
-  if (process.platform !== 'win32') throw new Error('Startup management is currently available on Windows only');
-  const current = startupStatus();
-  if (!enabled && current.source === 'scheduled-task') throw new Error('当前使用管理员恢复任务，请以管理员身份运行 uninstall-autostart.ps1 关闭');
-  const script = path.join(__dirname, enabled ? 'install-pilot-autostart.ps1' : 'uninstall-pilot-autostart.ps1');
-  execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], { stdio: 'ignore', timeout: 10000, windowsHide: true });
-  return startupStatus();
+  if (process.platform === 'darwin') return setMacosStartupEnabled(enabled, __dirname);
+  return windowsPlatform.setStartupEnabled(enabled, __dirname);
 }
 
-async function activeBackend() {
-  const backends = await discoverBackends();
+async function activeBackend(backends) {
+  backends ||= await discoverBackends();
   return backends.find((item) => item.online && item.id === runtime.selectedBackend) || backends.find((item) => item.online) || null;
 }
 
-async function controllerRequest(route, options = {}) {
-  const backend = await activeBackend();
+async function controllerRequest(route, options = {}, backendOverride = null) {
+  const backend = backendOverride || await activeBackend();
   if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
   const client = new ControllerClient({ controller: backend.config.controller, secret: backend.config.secret });
   return client.request(route, options);
 }
 
-async function inventory() {
-  const backend = await activeBackend();
+async function inventory(backendOverride = null) {
+  const backend = backendOverride || await activeBackend();
   if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
-  const payload = await controllerRequest('/proxies');
+  const payload = await controllerRequest('/proxies', {}, backend);
   const { proxies, groups } = optimizerCore.selectorGroupsFromPayload(payload);
   return { proxies, groups, backend };
 }
@@ -295,7 +244,45 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+function publicBackend({ id, name, online, version, platform, capabilities, diagnostic }) {
+  return { id, name, online, version, platform, capabilities, diagnostic };
+}
+
+function automationStatus(targetGroup = null) {
+  return {
+    running: runtime.running,
+    startedAt: runtime.startedAt,
+    history: runtime.history,
+    lastResults: runtime.lastResults,
+    nextRunAt: runtime.nextRunAt,
+    lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0,
+    monitorOnly: Boolean(runtime.monitorOnly),
+    settings: runtime.settings,
+    trackedNodes: Object.keys(runtime.health).length
+  };
+}
+
+function isLocalWebOrigin(value) {
+  try {
+    const parsed = new URL(value);
+    return ['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname) && (!parsed.port || Number(parsed.port) === PORT);
+  } catch {
+    return false;
+  }
+}
+
+function assertLocalApiWrite(req) {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return;
+  const origin = req.headers.origin;
+  if (origin && !isLocalWebOrigin(origin)) throw Object.assign(new Error('Cross-origin local API write rejected'), { status: 403 });
+  const referer = req.headers.referer;
+  if (!origin && referer && !isLocalWebOrigin(referer)) throw Object.assign(new Error('Cross-origin local API write rejected'), { status: 403 });
+  const fetchSite = req.headers['sec-fetch-site'];
+  if (fetchSite && !['same-origin', 'same-site', 'none'].includes(fetchSite)) throw Object.assign(new Error('Cross-origin local API write rejected'), { status: 403 });
+}
+
 async function apiHandler(req, res, url) {
+  assertLocalApiWrite(req);
   if (req.method === 'GET' && url.pathname === '/api/health') {
     return sendJson(res, 200, {
       ok: true,
@@ -306,32 +293,51 @@ async function apiHandler(req, res, url) {
     });
   }
   if (req.method === 'GET' && url.pathname === '/api/pairings') {
+    requireManualPairingApi();
     return sendJson(res, 200, { secureStore: secureStore.backend, pairings: runtime.pairings.map(({ id, name, controller }) => ({ id, name, controller })) });
   }
   if (req.method === 'POST' && url.pathname === '/api/pairings') {
+    requireManualPairingApi();
     const saved = await saveManualPairing(await readJson(req));
     return sendJson(res, 201, saved);
   }
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/pairings/')) {
+    requireManualPairingApi();
     const id = decodeURIComponent(url.pathname.slice('/api/pairings/'.length));
     revokeManualPairing(id);
     return sendJson(res, 200, { revoked: true });
   }
   if (req.method === 'GET' && url.pathname === '/api/status') {
-    const { groups, backend } = await inventory();
-    const targetGroup = await pickPrimaryGroup(groups, backend);
     const discovered = await discoverBackends();
-    const v2rayN = detectV2rayN();
+    const backend = await activeBackend(discovered);
+    const v2rayN = windowsPlatform.detectV2rayN(process.env);
+    if (!backend) {
+      return sendJson(res, 200, {
+        connected: false,
+        startup: startupStatus(),
+        backend: null,
+        backends: discovered.map(publicBackend),
+        detectedClients: [...discovered.map((item) => ({ ...publicBackend(item), writable: Boolean(item.capabilities?.switching === 'supported') })), v2rayN],
+        groups: [],
+        targetGroup: null,
+        targetSource: 'unavailable',
+        automation: automationStatus(),
+        defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 },
+        diagnostic: { code: 'controller-unavailable', message: 'No supported Clash/Mihomo controller is online' }
+      });
+    }
+    const { groups } = await inventory(backend);
+    const targetGroup = await pickPrimaryGroup(groups, backend);
     return sendJson(res, 200, {
       connected: true,
       startup: startupStatus(),
       backend: { id: backend.id, name: backend.name, version: backend.version },
-      backends: discovered.map(({ id, name, online, version, platform, capabilities, diagnostic }) => ({ id, name, online, version, platform, capabilities, diagnostic })),
-      detectedClients: [...discovered.map(({ id, name, online, version, platform, capabilities, diagnostic }) => ({ id, name, online, version, platform, capabilities, diagnostic, writable: Boolean(capabilities?.switching === 'supported') })), v2rayN],
+      backends: discovered.map(publicBackend),
+      detectedClients: [...discovered.map((item) => ({ ...publicBackend(item), writable: Boolean(item.capabilities?.switching === 'supported') })), v2rayN],
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
       targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
-      automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
+      automation: automationStatus(targetGroup),
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
   }

@@ -163,12 +163,10 @@ public final class MainActivity extends Activity {
 
     private void pair(String controllerUrl, String secretValue, String groupValue, String filterValue) {
         try {
-            if (!controllerUrl.matches("https?://(127\\.0\\.0\\.1|localhost|\\[::1\\])(:\\d{2,5})?")) {
-                updateStatus("Controller 必须是手机本机地址，例如 http://127.0.0.1:9097。");
-                return;
-            }
             store.save(controllerUrl, secretValue, groupValue, filterValue);
             updateStatus("已配对。Secret 使用 Android Keystore 加密保存。");
+        } catch (IllegalArgumentException error) {
+            updateStatus("Controller 必须是手机本机地址，例如 http://127.0.0.1:9097。");
         } catch (Exception error) {
             updateStatus("配对失败：" + error.getMessage());
         }
