@@ -15,12 +15,13 @@
 2. 打开 Clash Node Pilot。
 3. 在 Client 区域点击 Refresh。若检测到 Clash Meta，可以点击 Open/Start/Stop 验证官方外部控制 intent。
 4. 注意：Clash Meta 的外部控制 intent 只代表可启动/停止客户端服务，不代表已经开放 Controller API。
-5. 在客户端内确认是否有 External Controller/API 设置；如果没有这个能力，Node Pilot 只能给诊断，不能切换节点。
-6. 如果不知道 URL，先点 Probe，让 APK 自动探测常见本地端口。
-7. 如果自动探测失败，再手动尝试 `http://127.0.0.1:9097` 或 `http://127.0.0.1:9090`。
-8. 如果提示 secret required，到 Clash/Mihomo 客户端里查看或设置 Controller secret 后再输入。
-9. 点击 Pair。
-10. 点击 Start Pilot。
+5. 对 Clash Meta for Android，源码里 `external-controller` 是 Override Settings 里的配置项。进入 Clash Meta 的 Settings / Override，找到 External Controller。
+6. 建议先填 `127.0.0.1:9097`；如需鉴权，再在 Secret 里填一个你自己设置的值。
+7. 保存后重启 Clash 服务。注意订阅 YAML 里的 `external-controller` 会被 Clash Meta 先清空，必须通过 Override Settings 生效。
+8. 回到 Node Pilot，点击 Probe。若提示 secret required，把 Clash Meta 里的 Secret 输入到 Node Pilot。
+9. 如果自动探测失败，再手动尝试 `http://127.0.0.1:9097` 或 `http://127.0.0.1:9090`。
+10. 点击 Pair。
+11. 点击 Start Pilot。
 
 期望结果：应用提示配对成功，并出现一个常驻前台服务通知。
 

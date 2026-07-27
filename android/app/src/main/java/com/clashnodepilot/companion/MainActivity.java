@@ -71,6 +71,7 @@ public final class MainActivity extends Activity {
         Ui.add(layout, clientRow);
 
         Ui.add(layout, Ui.sectionTitle(this, "Controller"));
+        Ui.add(layout, Ui.body(this, "Clash Meta source defines this in Override settings: external-controller and secret. Set External Controller to 127.0.0.1:9097, then restart Clash service before probing."));
         controller = Ui.input(this, "http://127.0.0.1:9097");
         controller.setText(store.controllerUrl());
         secret = Ui.input(this, "Controller secret");
