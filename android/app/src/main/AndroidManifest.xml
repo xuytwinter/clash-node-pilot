@@ -5,6 +5,18 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <queries>
+        <package android:name="com.github.metacubex.clash.meta" />
+        <package android:name="com.github.metacubex.clash" />
+        <package android:name="com.github.kr328.clash" />
+        <intent>
+            <action android:name="com.github.metacubex.clash.meta.action.START_CLASH" />
+        </intent>
+        <intent>
+            <action android:name="com.github.metacubex.clash.meta.action.STOP_CLASH" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:usesCleartextTraffic="true"

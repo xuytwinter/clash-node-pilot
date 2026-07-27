@@ -11,12 +11,16 @@
 
 ## 配对
 
-1. 在手机上启动兼容的 Clash/Mihomo 客户端，并开启本地 Controller API。
+1. 在手机上启动兼容的 Clash/Mihomo 客户端。Clash Verge Rev 官方是桌面端；Android 侧优先测试 Clash Meta for Android 或其它明确暴露 Controller API 的客户端。
 2. 打开 Clash Node Pilot。
-3. 如果不知道 URL，先点 Probe local Controller，让 APK 自动探测常见本地端口。
-4. 如果自动探测失败，再手动尝试 `http://127.0.0.1:9097` 或 `http://127.0.0.1:9090`。
-5. 如果提示 secret required，到 Clash/Mihomo 客户端里查看或设置 Controller secret 后再输入。
-6. 点击 Pair and start。
+3. 在 Client 区域点击 Refresh。若检测到 Clash Meta，可以点击 Open/Start/Stop 验证官方外部控制 intent。
+4. 注意：Clash Meta 的外部控制 intent 只代表可启动/停止客户端服务，不代表已经开放 Controller API。
+5. 在客户端内确认是否有 External Controller/API 设置；如果没有这个能力，Node Pilot 只能给诊断，不能切换节点。
+6. 如果不知道 URL，先点 Probe，让 APK 自动探测常见本地端口。
+7. 如果自动探测失败，再手动尝试 `http://127.0.0.1:9097` 或 `http://127.0.0.1:9090`。
+8. 如果提示 secret required，到 Clash/Mihomo 客户端里查看或设置 Controller secret 后再输入。
+9. 点击 Pair。
+10. 点击 Start Pilot。
 
 期望结果：应用提示配对成功，并出现一个常驻前台服务通知。
 
