@@ -16,6 +16,7 @@ public final class PilotForegroundService extends Service {
     private static final int NOTIFICATION_ID = 3210;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private PairingStore store;
+    private volatile boolean optimizing;
 
     private final Runnable poller = new Runnable() {
         @Override
@@ -40,7 +41,14 @@ public final class PilotForegroundService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
-        startForeground(NOTIFICATION_ID, notification("Node Pilot is monitoring the paired local Controller."));
+        if (intent != null && PairingStore.ACTION_STOP.equals(intent.getAction())) {
+            handler.removeCallbacks(poller);
+            updateNotification("Automatic optimization stopped.");
+            stopForeground(STOP_FOREGROUND_REMOVE);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+        startForeground(NOTIFICATION_ID, notification("Node Pilot is optimizing the paired local Controller."));
         handler.removeCallbacks(poller);
         handler.post(poller);
         return START_STICKY;
@@ -63,13 +71,21 @@ public final class PilotForegroundService extends Service {
             stopSelf();
             return;
         }
+        if (optimizing) return;
+        optimizing = true;
         new Thread(() -> {
             try {
                 ControllerClient client = new ControllerClient(store.controllerUrl(), store.secret());
-                client.get("/version");
-                updateNotification("Controller reachable. Waiting for approved optimization.");
+                AndroidOptimizer.Result result = AndroidOptimizer.optimize(client, store.targetGroup(), store.nodeFilter());
+                if (result.switched) {
+                    updateNotification("Switched " + result.groupName + " to " + result.bestName + " (" + result.bestDelay + " ms).");
+                } else {
+                    updateNotification("Best node already active: " + result.bestName + " (" + result.bestDelay + " ms).");
+                }
             } catch (Exception error) {
-                updateNotification("Controller unavailable or pairing revoked. No switching performed.");
+                updateNotification("Optimization skipped: " + error.getMessage());
+            } finally {
+                optimizing = false;
             }
         }).start();
     }

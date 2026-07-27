@@ -26,6 +26,8 @@ public final class MainActivity extends Activity {
     private TextView clientSummary;
     private EditText controller;
     private EditText secret;
+    private EditText targetGroup;
+    private EditText nodeFilter;
     private ExternalClashApp clashApp;
 
     @Override
@@ -36,7 +38,7 @@ public final class MainActivity extends Activity {
         requestNotifications();
         buildUi();
         refreshClientSummary();
-        updateStatus(store.isPaired() ? "Paired. Foreground service can run." : "Not paired. Detect the client, then probe Controller.");
+        updateStatus(store.isPaired() ? "已配对，可以立即优化或启动自动优化。" : "未配对。先打开 Clash Meta，启用 External Controller，然后点探测。");
     }
 
     private void requestNotifications() {
@@ -56,14 +58,14 @@ public final class MainActivity extends Activity {
         status = Ui.status(this);
         Ui.add(layout, status);
 
-        Ui.add(layout, Ui.sectionTitle(this, "Client"));
+        Ui.add(layout, Ui.sectionTitle(this, "客户端"));
         clientSummary = Ui.body(this, "");
         Ui.add(layout, clientSummary);
         LinearLayout clientRow = Ui.row(this);
-        Button refreshClient = Ui.secondaryButton(this, "Refresh");
-        Button openClient = Ui.secondaryButton(this, "Open");
-        Button startClient = Ui.secondaryButton(this, "Start");
-        Button stopClient = Ui.secondaryButton(this, "Stop");
+        Button refreshClient = Ui.secondaryButton(this, "刷新");
+        Button openClient = Ui.secondaryButton(this, "打开");
+        Button startClient = Ui.secondaryButton(this, "启动");
+        Button stopClient = Ui.secondaryButton(this, "停止");
         Ui.addWeighted(clientRow, refreshClient);
         Ui.addWeighted(clientRow, openClient);
         Ui.addWeighted(clientRow, startClient);
@@ -71,38 +73,53 @@ public final class MainActivity extends Activity {
         Ui.add(layout, clientRow);
 
         Ui.add(layout, Ui.sectionTitle(this, "Controller"));
-        Ui.add(layout, Ui.body(this, "Clash Meta source defines this in Override settings: external-controller and secret. Set External Controller to 127.0.0.1:9097, then restart Clash service before probing."));
+        Ui.add(layout, Ui.body(this, "在 Clash Meta 的 Override Settings 里设置 External Controller，例如 127.0.0.1:9097；如设置 Secret，这里也填同一个。保存后重启 Clash 服务再探测。"));
         controller = Ui.input(this, "http://127.0.0.1:9097");
         controller.setText(store.controllerUrl());
-        secret = Ui.input(this, "Controller secret");
+        secret = Ui.input(this, "Controller secret，可空");
         Ui.add(layout, controller);
         Ui.add(layout, secret);
         LinearLayout controllerRow = Ui.row(this);
-        Button probe = Ui.secondaryButton(this, "Probe");
-        Button pair = Ui.primaryButton(this, "Pair");
+        Button probe = Ui.secondaryButton(this, "探测");
+        Button pair = Ui.primaryButton(this, "配对");
         Ui.addWeighted(controllerRow, probe);
         Ui.addWeighted(controllerRow, pair);
         Ui.add(layout, controllerRow);
 
-        Ui.add(layout, Ui.sectionTitle(this, "Automation"));
+        Ui.add(layout, Ui.sectionTitle(this, "自动优化"));
+        Ui.add(layout, Ui.body(this, "代理组名可空，默认自动选择 Selector。节点关键词可空；例如填 HK、香港、US、Japan，就只在匹配节点里测速。"));
+        targetGroup = Ui.input(this, "代理组名，可空，例如 Proxy / Selector / 节点选择");
+        targetGroup.setText(store.targetGroup());
+        nodeFilter = Ui.input(this, "节点关键词，可空");
+        nodeFilter.setText(store.nodeFilter());
+        Ui.add(layout, targetGroup);
+        Ui.add(layout, nodeFilter);
         LinearLayout serviceRow = Ui.row(this);
-        Button startPilot = Ui.primaryButton(this, "Start Pilot");
-        Button revoke = Ui.secondaryButton(this, "Revoke");
+        Button optimizeNow = Ui.primaryButton(this, "立即优化");
+        Button startPilot = Ui.primaryButton(this, "启动自动");
+        Ui.addWeighted(serviceRow, optimizeNow);
         Ui.addWeighted(serviceRow, startPilot);
-        Ui.addWeighted(serviceRow, revoke);
         Ui.add(layout, serviceRow);
-        Ui.add(layout, Ui.body(this, "Clash Meta exposes start/stop intents. Node switching still requires a reachable Clash/Mihomo Controller API."));
+        LinearLayout stopRow = Ui.row(this);
+        Button stopPilot = Ui.secondaryButton(this, "停止自动");
+        Button revoke = Ui.secondaryButton(this, "撤销配对");
+        Ui.addWeighted(stopRow, stopPilot);
+        Ui.addWeighted(stopRow, revoke);
+        Ui.add(layout, stopRow);
+        Ui.add(layout, Ui.body(this, "自动优化只通过标准 Clash/Mihomo Controller API 切换 Selector，不使用 root、ADB 或修改 Clash Meta 私有文件。"));
 
         refreshClient.setOnClickListener(view -> {
             clashApp = ExternalClashApp.detect(this);
             refreshClientSummary();
         });
         openClient.setOnClickListener(view -> openClient());
-        startClient.setOnClickListener(view -> sendClashAction("START_CLASH", "Clash Meta start request was sent."));
-        stopClient.setOnClickListener(view -> sendClashAction("STOP_CLASH", "Clash Meta stop request was sent."));
+        startClient.setOnClickListener(view -> sendClashAction("START_CLASH", "已发送 Clash Meta 启动请求。"));
+        stopClient.setOnClickListener(view -> sendClashAction("STOP_CLASH", "已发送 Clash Meta 停止请求。"));
         probe.setOnClickListener(view -> probe());
-        pair.setOnClickListener(view -> pair(controller.getText().toString(), secret.getText().toString()));
+        pair.setOnClickListener(view -> pair(controller.getText().toString(), secret.getText().toString(), targetGroup.getText().toString(), nodeFilter.getText().toString()));
+        optimizeNow.setOnClickListener(view -> optimizeOnce());
         startPilot.setOnClickListener(view -> startPilotService());
+        stopPilot.setOnClickListener(view -> stopPilotService());
         revoke.setOnClickListener(view -> revokePairing());
 
         setContentView(root);
@@ -110,20 +127,20 @@ public final class MainActivity extends Activity {
 
     private void refreshClientSummary() {
         if (clashApp == null) {
-            clientSummary.setText("Clash Meta for Android was not detected. Clash Verge Rev is a desktop app; Android needs a compatible Clash/Mihomo client with Controller API access.");
+            clientSummary.setText("未检测到 Clash Meta for Android。Android 需要一个能开放 Controller API 的 Clash/Mihomo 客户端。");
         } else {
-            clientSummary.setText("Detected " + clashApp.label + " (" + clashApp.packageName + ")");
+            clientSummary.setText("已检测到 " + clashApp.label + " (" + clashApp.packageName + ")");
         }
     }
 
     private void openClient() {
         if (clashApp == null) {
-            updateStatus("No known Clash Meta client was detected.");
+            updateStatus("没有检测到已知 Clash Meta 客户端。");
             return;
         }
         Intent intent = clashApp.launchIntent(this);
         if (intent == null) {
-            updateStatus("Client was detected, but Android did not expose a launch Activity.");
+            updateStatus("检测到客户端，但 Android 没有暴露可打开的 Activity。");
             return;
         }
         startActivity(intent);
@@ -131,37 +148,48 @@ public final class MainActivity extends Activity {
 
     private void sendClashAction(String action, String success) {
         if (clashApp == null) {
-            updateStatus("No Clash Meta client was detected, so the official external-control intent cannot be sent.");
+            updateStatus("没有检测到 Clash Meta，无法发送官方外部控制 intent。");
             return;
         }
         try {
             startActivity(clashApp.serviceIntent(action));
             updateStatus(success);
         } catch (ActivityNotFoundException error) {
-            updateStatus("The client did not export ExternalControlActivity for " + action + ".");
+            updateStatus("客户端没有为 " + action + " 暴露 ExternalControlActivity。");
         } catch (Exception error) {
-            updateStatus("External control failed: " + error.getMessage());
+            updateStatus("外部控制失败：" + error.getMessage());
         }
     }
 
-    private void pair(String controllerUrl, String secretValue) {
+    private void pair(String controllerUrl, String secretValue, String groupValue, String filterValue) {
         try {
             if (!controllerUrl.matches("https?://(127\\.0\\.0\\.1|localhost|\\[::1\\])(:\\d{2,5})?")) {
-                updateStatus("Controller must be a phone-local URL, such as http://127.0.0.1:9097.");
+                updateStatus("Controller 必须是手机本机地址，例如 http://127.0.0.1:9097。");
                 return;
             }
-            store.save(controllerUrl, secretValue);
-            updateStatus("Paired. Secret is stored with Android Keystore-backed encryption.");
+            store.save(controllerUrl, secretValue, groupValue, filterValue);
+            updateStatus("已配对。Secret 使用 Android Keystore 加密保存。");
         } catch (Exception error) {
-            updateStatus("Pairing failed: " + error.getMessage());
+            updateStatus("配对失败：" + error.getMessage());
         }
     }
 
     private void startPilotService() {
+        try {
+            store.save(controller.getText().toString(), secret.getText().toString(), targetGroup.getText().toString(), nodeFilter.getText().toString());
+        } catch (Exception error) {
+            updateStatus("保存自动优化设置失败：" + error.getMessage());
+            return;
+        }
         Intent intent = new Intent(this, PilotForegroundService.class).setAction(PairingStore.ACTION_START);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
         else startService(intent);
-        updateStatus("Node Pilot foreground service start requested.");
+        updateStatus("已请求启动自动优化前台服务。");
+    }
+
+    private void stopPilotService() {
+        startService(new Intent(this, PilotForegroundService.class).setAction(PairingStore.ACTION_STOP));
+        updateStatus("已请求停止自动优化。");
     }
 
     private void revokePairing() {
@@ -169,26 +197,33 @@ public final class MainActivity extends Activity {
         startService(new Intent(this, PilotForegroundService.class).setAction(PairingStore.ACTION_REVOKE));
         controller.setText("");
         secret.setText("");
-        updateStatus("Pairing revoked. Local state was cleared.");
+        targetGroup.setText("");
+        nodeFilter.setText("");
+        updateStatus("已撤销配对，本地状态已清除。");
     }
 
     private void probe() {
-        updateStatus("Probing common local Controller ports...");
+        updateStatus("正在探测手机本机 Controller 端口...");
         String secretValue = secret.getText().toString();
         new Thread(() -> {
             for (String candidate : LOCAL_CONTROLLER_CANDIDATES) {
                 try {
-                    new ControllerClient(candidate, secretValue).get("/version");
+                    ControllerClient client = new ControllerClient(candidate, secretValue);
+                    client.get("/version");
+                    AndroidOptimizer.Inspection inspection = AndroidOptimizer.inspect(client, targetGroup.getText().toString(), nodeFilter.getText().toString());
                     runOnUiThread(() -> {
                         controller.setText(candidate);
-                        updateStatus("Found Controller: " + candidate);
+                        if (targetGroup.getText().toString().trim().isEmpty() && !inspection.groupName.isEmpty()) {
+                            targetGroup.setText(inspection.groupName);
+                        }
+                        updateStatus("已找到 Controller：" + candidate + "；Selector 组 " + inspection.groupCount + " 个，当前使用 " + inspection.groupName + "，候选节点 " + inspection.candidateCount + " 个。");
                     });
                     return;
                 } catch (ControllerHttpException error) {
                     if (error.statusCode == 401) {
                         runOnUiThread(() -> {
                             controller.setText(candidate);
-                            updateStatus("Found Controller, but a secret is required: " + candidate);
+                            updateStatus("找到 Controller，但需要 Secret：" + candidate);
                         });
                         return;
                     }
@@ -196,7 +231,33 @@ public final class MainActivity extends Activity {
                     /* try the next common local port */
                 }
             }
-            runOnUiThread(() -> updateStatus("No Controller found. Confirm that your Android Clash/Mihomo client supports and enables External Controller/API. Starting VPN by intent is not the same as exposing Controller API."));
+            runOnUiThread(() -> updateStatus("没有找到 Controller。请确认 Clash Meta 的 Override Settings 已设置 external-controller，并重启 Clash 服务。只启动 VPN 不等于开放 Controller API。"));
+        }).start();
+    }
+
+    private void optimizeOnce() {
+        if (!store.isPaired()) {
+            pair(controller.getText().toString(), secret.getText().toString(), targetGroup.getText().toString(), nodeFilter.getText().toString());
+            if (!store.isPaired()) return;
+        } else {
+            try {
+                store.save(controller.getText().toString(), secret.getText().toString(), targetGroup.getText().toString(), nodeFilter.getText().toString());
+            } catch (Exception error) {
+                updateStatus("保存优化设置失败：" + error.getMessage());
+                return;
+            }
+        }
+        updateStatus("正在测速并选择最快节点...");
+        new Thread(() -> {
+            try {
+                ControllerClient client = new ControllerClient(store.controllerUrl(), store.secret());
+                AndroidOptimizer.Result result = AndroidOptimizer.optimize(client, store.targetGroup(), store.nodeFilter());
+                runOnUiThread(() -> updateStatus(result.switched
+                        ? "已切换 " + result.groupName + " 到 " + result.bestName + "，延迟 " + result.bestDelay + " ms。"
+                        : "当前已是最快节点：" + result.bestName + "，延迟 " + result.bestDelay + " ms。"));
+            } catch (Exception error) {
+                runOnUiThread(() -> updateStatus("优化失败：" + error.getMessage()));
+            }
         }).start();
     }
 

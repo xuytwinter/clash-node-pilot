@@ -7,7 +7,8 @@ This directory contains the native Android companion source for the first non-ro
 - No root, ADB, AccessibilityService, private app files, GUI automation, or same-signature/shared-UID assumptions.
 - One explicit pairing screen for a local Clash/Mihomo Controller URL and optional secret.
 - Secret storage uses Android Keystore-backed AES/GCM encryption with app-private SharedPreferences ciphertext.
-- A foreground service keeps a visible notification while it monitors Controller reachability.
+- A foreground service keeps a visible notification while it measures candidate nodes and switches the selected Selector through the standard Controller API.
+- Manual "optimize now" supports an optional target Selector group and optional node-name keyword filter.
 - Boot and package-replaced receivers restart only after a pairing already exists.
 - Revoking pairing clears local pairing state and stops the foreground service.
 

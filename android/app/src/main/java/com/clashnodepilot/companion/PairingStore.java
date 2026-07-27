@@ -15,6 +15,7 @@ import javax.crypto.spec.GCMParameterSpec;
 
 final class PairingStore {
     static final String ACTION_START = "com.clashnodepilot.companion.START";
+    static final String ACTION_STOP = "com.clashnodepilot.companion.STOP";
     static final String ACTION_REVOKE = "com.clashnodepilot.companion.REVOKE";
     private static final String PREFS = "pairing";
     private static final String KEY_ALIAS = "clash-node-pilot-controller";
@@ -24,7 +25,7 @@ final class PairingStore {
         this.prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    void save(String controllerUrl, String secret) throws Exception {
+    void save(String controllerUrl, String secret, String targetGroup, String nodeFilter) throws Exception {
         byte[] iv = new byte[12];
         new SecureRandom().nextBytes(iv);
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
@@ -32,6 +33,8 @@ final class PairingStore {
         byte[] ciphertext = cipher.doFinal(secret.getBytes(StandardCharsets.UTF_8));
         prefs.edit()
                 .putString("controllerUrl", controllerUrl)
+                .putString("targetGroup", targetGroup == null ? "" : targetGroup.trim())
+                .putString("nodeFilter", nodeFilter == null ? "" : nodeFilter.trim())
                 .putString("secretIv", Base64.getEncoder().encodeToString(iv))
                 .putString("secretCiphertext", Base64.getEncoder().encodeToString(ciphertext))
                 .putBoolean("paired", true)
@@ -40,6 +43,14 @@ final class PairingStore {
 
     String controllerUrl() {
         return prefs.getString("controllerUrl", "");
+    }
+
+    String targetGroup() {
+        return prefs.getString("targetGroup", "");
+    }
+
+    String nodeFilter() {
+        return prefs.getString("nodeFilter", "");
     }
 
     String secret() throws Exception {
