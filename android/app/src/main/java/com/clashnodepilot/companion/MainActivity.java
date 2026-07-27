@@ -12,6 +12,13 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 public final class MainActivity extends Activity {
+    private static final String[] LOCAL_CONTROLLER_CANDIDATES = new String[]{
+            "http://127.0.0.1:9097",
+            "http://127.0.0.1:9090",
+            "http://127.0.0.1:9091",
+            "http://localhost:9097",
+            "http://localhost:9090"
+    };
     private PairingStore store;
     private TextView status;
 
@@ -38,10 +45,13 @@ public final class MainActivity extends Activity {
         secret.setSingleLine(true);
         Button pair = new Button(this);
         pair.setText("Pair and start");
+        Button probe = new Button(this);
+        probe.setText("Probe local Controller");
         Button revoke = new Button(this);
         revoke.setText("Revoke pairing");
 
         pair.setOnClickListener(view -> pair(controller.getText().toString(), secret.getText().toString()));
+        probe.setOnClickListener(view -> probe(controller, secret.getText().toString()));
         revoke.setOnClickListener(view -> {
             store.revoke();
             startService(new Intent(this, PilotForegroundService.class).setAction(PairingStore.ACTION_REVOKE));
@@ -51,6 +61,7 @@ public final class MainActivity extends Activity {
         layout.addView(status);
         layout.addView(controller);
         layout.addView(secret);
+        layout.addView(probe);
         layout.addView(pair);
         layout.addView(revoke);
         setContentView(layout);
@@ -71,6 +82,33 @@ public final class MainActivity extends Activity {
         } catch (Exception error) {
             updateStatus("Pairing failed: " + error.getMessage());
         }
+    }
+
+    private void probe(EditText controller, String secret) {
+        updateStatus("Probing common local Controller ports...");
+        new Thread(() -> {
+            for (String candidate : LOCAL_CONTROLLER_CANDIDATES) {
+                try {
+                    new ControllerClient(candidate, secret).get("/version");
+                    runOnUiThread(() -> {
+                        controller.setText(candidate);
+                        updateStatus("Found Controller: " + candidate);
+                    });
+                    return;
+                } catch (ControllerHttpException error) {
+                    if (error.statusCode == 401) {
+                        runOnUiThread(() -> {
+                            controller.setText(candidate);
+                            updateStatus("Found Controller but secret is required: " + candidate);
+                        });
+                        return;
+                    }
+                } catch (Exception ignored) {
+                    /* try the next common local port */
+                }
+            }
+            runOnUiThread(() -> updateStatus("No local Controller found. Open your Clash/Mihomo client and enable External Controller/API."));
+        }).start();
     }
 
     private void updateStatus(String text) {

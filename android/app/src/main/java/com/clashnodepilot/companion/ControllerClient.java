@@ -5,6 +5,15 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
+final class ControllerHttpException extends Exception {
+    final int statusCode;
+
+    ControllerHttpException(int statusCode) {
+        super("Controller returned HTTP " + statusCode);
+        this.statusCode = statusCode;
+    }
+}
+
 final class ControllerClient {
     private final String controllerUrl;
     private final String secret;
@@ -21,12 +30,15 @@ final class ControllerClient {
         connection.setRequestProperty("Accept", "application/json");
         if (!secret.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + secret);
         int status = connection.getResponseCode();
+        if (connection.getErrorStream() == null && (status < 200 || status >= 300)) {
+            throw new ControllerHttpException(status);
+        }
         BufferedReader reader = new BufferedReader(new InputStreamReader(
                 status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream()));
         StringBuilder body = new StringBuilder();
         String line;
         while ((line = reader.readLine()) != null) body.append(line);
-        if (status < 200 || status >= 300) throw new IllegalStateException("Controller returned HTTP " + status);
+        if (status < 200 || status >= 300) throw new ControllerHttpException(status);
         return body.toString();
     }
 }

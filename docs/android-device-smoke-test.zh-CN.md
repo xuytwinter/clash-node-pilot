@@ -13,9 +13,10 @@
 
 1. 在手机上启动兼容的 Clash/Mihomo 客户端，并开启本地 Controller API。
 2. 打开 Clash Node Pilot。
-3. 输入明确的本地 Controller URL，例如 `http://127.0.0.1:9097`。
-4. 如果客户端要求 secret，再输入 Controller secret。
-5. 点击 Pair and start。
+3. 如果不知道 URL，先点 Probe local Controller，让 APK 自动探测常见本地端口。
+4. 如果自动探测失败，再手动尝试 `http://127.0.0.1:9097` 或 `http://127.0.0.1:9090`。
+5. 如果提示 secret required，到 Clash/Mihomo 客户端里查看或设置 Controller secret 后再输入。
+6. 点击 Pair and start。
 
 期望结果：应用提示配对成功，并出现一个常驻前台服务通知。
 
