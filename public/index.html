@@ -12,7 +12,7 @@
       <span class="mark">NP</span>
       <div>
         <strong>Clash Node Pilot</strong>
-        <span>本地 Clash/Mihomo 节点优化器</span>
+        <span>本地 Clash/Mihomo 节点优选器</span>
       </div>
     </div>
     <div class="header-actions">
@@ -36,7 +36,7 @@
       <aside class="controls">
         <div class="control-heading">
           <label for="backendSelect">客户端</label>
-          <button id="settingsButton" class="settings-button" type="button">自动设置</button>
+          <button id="settingsButton" class="settings-button" type="button">后台设置</button>
         </div>
         <select id="backendSelect"></select>
         <p id="clientInfo" class="hint"></p>
@@ -55,9 +55,9 @@
           <button id="lockButton" class="text-button" type="button">锁定 15 分钟</button>
         </div>
 
-        <button id="optimizeButton" class="primary" disabled><span>开始测速并优化</span></button>
+        <button id="optimizeButton" class="primary" disabled><span>开始测速并优选</span></button>
         <p id="message" class="message" aria-live="polite"></p>
-        <p id="automationStatus" class="automation-status">正在读取自动任务状态...</p>
+        <p id="automationStatus" class="automation-status">正在读取后台优选状态...</p>
       </aside>
 
       <section class="results-panel">
@@ -83,7 +83,7 @@
   <dialog id="settingsDialog" class="settings-dialog">
     <div class="dialog-heading">
       <div>
-        <p class="eyebrow">自动优化</p>
+        <p class="eyebrow">节点优选</p>
         <h2>测速与保护设置</h2>
       </div>
       <button id="closeSettings" class="icon-button" type="button" aria-label="关闭设置">×</button>

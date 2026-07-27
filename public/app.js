@@ -56,8 +56,8 @@ function renderAutomation(data) {
   const next = automation.nextRunAt ? new Date(automation.nextRunAt).toLocaleTimeString() : '等待下一轮';
   const interval = automation.settings?.autoIntervalMinutes ?? 3;
   $('automationStatus').textContent = lock
-    ? `手动保护中：自动测速与切换暂停约 ${lock} 分钟 · 下次检查 ${next}`
-    : `自动测速每 ${interval} 分钟运行 · 已跟踪 ${automation.trackedNodes || 0} 个节点 · 下次测速 ${next}`;
+    ? `手动保护中：后台测速与切换暂停约 ${lock} 分钟 · 下次检查 ${next}`
+    : `后台优选每 ${interval} 分钟运行 · 已跟踪 ${automation.trackedNodes || 0} 个节点 · 下次测速 ${next}`;
   const trend = (automation.history || []).filter((item) => item.best?.delay).slice(0, 20).reverse();
   const maxDelay = Math.max(1, ...trend.map((item) => item.best.delay));
   $('trendHeading').hidden = !trend.length;
@@ -134,7 +134,7 @@ async function optimize() {
   const button = $('optimizeButton');
   button.disabled = true;
   button.classList.add('loading');
-  button.querySelector('span').textContent = '正在并发测速...';
+  button.querySelector('span').textContent = '正在测速并优选...';
   $('message').textContent = '测速期间请保持 Clash/Mihomo 客户端运行。';
   $('message').className = 'message';
   try {
@@ -154,14 +154,14 @@ async function optimize() {
     if (group) group.now = data.active;
     updateCurrent();
     $('message').textContent = data.switched
-      ? `已切换到最快节点，延迟 ${data.best.delay} ms。`
-      : `最快节点延迟 ${data.best.delay} ms${$('autoSwitch').checked ? '，当前已是该节点。' : '，未执行切换。'}`;
+      ? `节点优选完成：已切换到最快节点，延迟 ${data.best.delay} ms。`
+      : `节点优选完成：最快节点延迟 ${data.best.delay} ms${$('autoSwitch').checked ? '，当前已是该节点。' : '，未执行切换。'}`;
   } catch (error) {
     $('message').textContent = error.message;
     $('message').className = 'message error';
   } finally {
     button.classList.remove('loading');
-    button.querySelector('span').textContent = '开始测速并优化';
+    button.querySelector('span').textContent = '开始测速并优选';
     updateButton();
   }
 }
@@ -219,7 +219,7 @@ $('saveSettings').addEventListener('click', async () => {
     body:JSON.stringify({ action:'settings', settings:{ autoIntervalMinutes:Number($('autoInterval').value), switchThresholdMs:Number($('switchThreshold').value), samples:Number($('samples').value), manualPauseMinutes:Number($('pauseMinutes').value) } })
   });
   $('settingsDialog').close();
-  $('message').textContent = '自动测速设置已保存。';
+  $('message').textContent = '后台优选设置已保存。';
   loadStatus();
 });
 

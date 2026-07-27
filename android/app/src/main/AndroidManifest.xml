@@ -20,7 +20,9 @@
     <application
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
+        android:icon="@mipmap/ic_launcher"
         android:label="Clash Node Pilot"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/AppTheme">
         <activity
             android:name=".MainActivity"

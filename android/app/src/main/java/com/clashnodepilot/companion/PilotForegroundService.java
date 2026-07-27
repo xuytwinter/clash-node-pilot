@@ -102,7 +102,7 @@ public final class PilotForegroundService extends Service {
         return builder
                 .setContentTitle("Clash Node Pilot")
                 .setContentText(text)
-                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setSmallIcon(R.drawable.ic_stat_node_pilot)
                 .setContentIntent(pending)
                 .setOngoing(true)
                 .build();
