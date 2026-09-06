@@ -8,6 +8,7 @@ const { ControllerClient, parseConfig: parseControllerConfig, probeConfigBackend
 const { createRegionResolver, loadRegions, summarizeRegions: summarizeRegionCounts } = require('./src/core/regions');
 const { JobCoordinator } = require('./src/core/jobs');
 const { normalizeProbeUrl, requireJsonContentType, securityHeaders, validateLocalApiRequest } = require('./src/core/security');
+const { STATE_SCHEMA_VERSION, clampNumber, sanitizeRuntimeSnapshot } = require('./src/core/state');
 const connectivityCore = require('./src/core/connectivity');
 const optimizerCore = require('./src/core/optimizer');
 
@@ -50,32 +51,74 @@ function migrateLegacyState(statePath = resolveStatePath(), legacyPath = LEGACY_
   return true;
 }
 const STATE_PATH = resolveStatePath();
-const runtime = { history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, nextConnectivityCheckAt: null, monitorOnly: false, selectedBackend: null, settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000, connectivityCheckMinutes: 1, connectivityTimeoutMs: 5000 } };
+const DEFAULT_SETTINGS = { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000, connectivityCheckMinutes: 1, connectivityTimeoutMs: 5000 };
+const runtime = { history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, nextConnectivityCheckAt: null, monitorOnly: false, selectedBackend: null, settings: { ...DEFAULT_SETTINGS }, diagnostics: [] };
 const coordinator = new JobCoordinator();
+
+function addDiagnostic(code, message) {
+  runtime.diagnostics.unshift({ at: new Date().toISOString(), code, message });
+  runtime.diagnostics = runtime.diagnostics.slice(0, 50);
+}
 
 function loadRuntimeState() {
   try {
-    const saved = JSON.parse(fsSync.readFileSync(STATE_PATH, 'utf8'));
-    runtime.history = Array.isArray(saved.history) ? saved.history.slice(0, 100) : [];
-    runtime.health = saved.health && typeof saved.health === 'object' ? saved.health : {};
-    runtime.lastResults = saved.lastResults || null;
-    runtime.monitorOnly = Boolean(saved.monitorOnly);
-    runtime.nextRunAt = saved.nextRunAt || null;
-    runtime.nextConnectivityCheckAt = saved.nextConnectivityCheckAt || null;
-    runtime.locks = new Map(Object.entries(saved.locks || {}).map(([key, value]) => [key, Number(value)]));
-    runtime.lastAuto = new Map(Object.entries(saved.lastAuto || {}));
-    runtime.settings = { ...runtime.settings, ...(saved.settings || {}) };
-    runtime.selectedBackend = saved.selectedBackend || null;
-  } catch { /* first run or invalid state starts cleanly */ }
+    const text = fsSync.readFileSync(STATE_PATH, 'utf8');
+    const parsed = JSON.parse(text);
+    const upgraded = parsed?.schemaVersion !== STATE_SCHEMA_VERSION;
+    const saved = sanitizeRuntimeSnapshot(parsed, DEFAULT_SETTINGS);
+    runtime.history = saved.history;
+    runtime.health = saved.health;
+    runtime.lastResults = saved.lastResults;
+    runtime.monitorOnly = saved.monitorOnly;
+    runtime.nextRunAt = saved.nextRunAt;
+    runtime.nextConnectivityCheckAt = saved.nextConnectivityCheckAt;
+    runtime.locks = new Map(Object.entries(saved.locks));
+    runtime.lastAuto = new Map(Object.entries(saved.lastAuto));
+    runtime.settings = saved.settings;
+    runtime.selectedBackend = saved.selectedBackend;
+    runtime.diagnostics = saved.diagnostics;
+    if (upgraded) addDiagnostic('state-upgraded', 'Runtime state was upgraded to the current schema');
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    addDiagnostic('state-load-failed', 'Runtime state could not be loaded and was ignored');
+    try {
+      fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
+      fsSync.copyFileSync(STATE_PATH, `${STATE_PATH}.invalid`);
+    } catch { /* best-effort corrupt state preservation */ }
+  }
 }
 
 function persistRuntimeState() {
   try {
     fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const temporary = `${STATE_PATH}.tmp`;
-    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, lastResults: runtime.lastResults, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, nextConnectivityCheckAt: runtime.nextConnectivityCheckAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings, selectedBackend: runtime.selectedBackend }, null, 2), 'utf8');
-    fsSync.renameSync(temporary, STATE_PATH);
-  } catch { /* state persistence must not stop proxy switching */ }
+    const snapshot = {
+      schemaVersion: STATE_SCHEMA_VERSION,
+      history: runtime.history,
+      health: runtime.health,
+      lastResults: runtime.lastResults,
+      monitorOnly: runtime.monitorOnly,
+      nextRunAt: runtime.nextRunAt,
+      nextConnectivityCheckAt: runtime.nextConnectivityCheckAt,
+      locks: Object.fromEntries(runtime.locks),
+      lastAuto: Object.fromEntries(runtime.lastAuto),
+      settings: runtime.settings,
+      selectedBackend: runtime.selectedBackend,
+      diagnostics: runtime.diagnostics
+    };
+    fsSync.writeFileSync(temporary, JSON.stringify(snapshot, null, 2), 'utf8');
+    if (fsSync.existsSync(STATE_PATH)) fsSync.copyFileSync(STATE_PATH, `${STATE_PATH}.bak`);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        fsSync.renameSync(temporary, STATE_PATH);
+        return;
+      } catch (error) {
+        if (attempt === 2) throw error;
+      }
+    }
+  } catch {
+    addDiagnostic('state-save-failed', 'Runtime state could not be saved');
+  }
 }
 
 migrateLegacyState();
@@ -270,10 +313,7 @@ function clearLastAuto(backend, groupName) {
 }
 
 function boundedNumber(value, fallback, min, max, { integer = true } = {}) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return fallback;
-  const clamped = Math.min(max, Math.max(min, number));
-  return integer ? Math.trunc(clamped) : clamped;
+  return clampNumber(value, fallback, min, max, { integer });
 }
 
 function nextAutoRunIso(now = Date.now()) {
@@ -739,6 +779,7 @@ async function apiHandler(req, res, url) {
       targetGroup: targetGroup?.name,
       targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
       automation: { running: Boolean(currentJob), currentJob, startedAt: currentJob?.startedAt || null, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, nextConnectivityCheckAt: runtime.nextConnectivityCheckAt, lockMs: targetGroup ? lockRemainingFor(backend, targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
+      diagnostics: runtime.diagnostics,
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
   }
