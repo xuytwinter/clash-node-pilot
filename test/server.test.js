@@ -52,10 +52,12 @@ test('uses the latest Clash Verge UI selected group record', () => {
   assert.equal(detectSelectedGroupFromBuffer(Buffer.concat([oldRecord, newRecord]), groups), '🚀节点选择');
 });
 test('state path honors CLASH_PILOT_STATE before LocalAppData default', () => {
-  const env = { LOCALAPPDATA: 'C:\\Temp\\Local', CLASH_PILOT_STATE: 'D:\\pilot\\state.json' };
-  assert.equal(resolveStatePath(env), path.resolve('D:\\pilot\\state.json'));
-  assert.equal(resolveStatePath({ LOCALAPPDATA: 'C:\\Temp\\Local' }), 'C:\\Temp\\Local\\ClashNodePilot\\state.json');
-  assert.equal(resolvePilotDataDir({ LOCALAPPDATA: 'C:\\Temp\\Local' }), 'C:\\Temp\\Local\\ClashNodePilot');
+  const base = path.join(sandbox, 'Local App Data');
+  const explicit = path.join(sandbox, 'pilot', 'state.json');
+  const env = { LOCALAPPDATA: base, CLASH_PILOT_STATE: explicit };
+  assert.equal(resolveStatePath(env), path.resolve(explicit));
+  assert.equal(resolveStatePath({ LOCALAPPDATA: base }), path.join(base, 'ClashNodePilot', 'state.json'));
+  assert.equal(resolvePilotDataDir({ LOCALAPPDATA: base }), path.join(base, 'ClashNodePilot'));
 });
 
 test('legacy repository state migrates once without deleting the old file', () => {
