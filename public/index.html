@@ -42,10 +42,13 @@
             <label for="switchThreshold">自动切换至少快多少（毫秒）</label><input id="switchThreshold" type="number" min="0" max="500" step="5">
             <label for="samples">每个节点测速次数</label><input id="samples" type="number" min="1" max="5">
             <label for="pauseMinutes">手动切换后暂停自动优化（分钟）</label><input id="pauseMinutes" type="number" min="1" max="1440">
+            <label for="connectivityInterval">保通检查间隔（分钟）</label><input id="connectivityInterval" type="number" min="1" max="30">
+            <label for="connectivityTimeout">保通单目标超时（毫秒）</label><input id="connectivityTimeout" type="number" min="1000" max="10000" step="500">
           </div>
           <div class="dialog-actions"><button id="cancelSettings" class="secondary" type="button">取消</button><button id="saveSettings" class="primary compact" type="button">保存设置</button></div>
         </dialog>
         <button id="optimizeButton" class="primary" disabled><span class="bolt">⚡</span><span>开始测速并优选</span></button>
+        <button id="cancelJobButton" class="secondary full" type="button" hidden>取消当前任务</button>
         <p id="message" class="message" aria-live="polite"></p>
         <p id="automationStatus" class="automation-status">自动任务状态读取中...</p>
       </div>

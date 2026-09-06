@@ -513,7 +513,8 @@ function recordConnectivityResult(result) {
     at: new Date().toISOString(),
     source: 'connectivity-heal',
     backend: result.backend,
-    group: result.controlGroup || result.group,
+    group: result.group,
+    controlGroup: result.controlGroup,
     active: result.active,
     reasonCode: result.code,
     results: (result.results || []).map(({ name, delay, ok, checks }) => ({ name, delay, ok, checks: checks?.map(({ id, ok, delay, error }) => ({ id, ok, delay, error })) }))

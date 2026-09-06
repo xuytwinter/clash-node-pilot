@@ -143,7 +143,7 @@ function securityHeaders({ html = false } = {}) {
     'X-Frame-Options': 'DENY',
     'Cross-Origin-Resource-Policy': 'same-origin',
     ...(html ? {
-      'Content-Security-Policy': "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+      'Content-Security-Policy': "default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
     } : {})
   };
 }
