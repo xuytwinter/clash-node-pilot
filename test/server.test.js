@@ -20,7 +20,9 @@ const {
   detectSelectedGroupFromBuffer,
   resolvePilotDataDir,
   resolveStatePath,
-  migrateLegacyState
+  migrateLegacyState,
+  resolveEffectiveSelector,
+  realMembers
 } = require('../server');
 
 test('parses controller config without requiring YAML dependency', () => {
@@ -50,6 +52,24 @@ test('uses the latest Clash Verge UI selected group record', () => {
   const newRecord = Buffer.concat([key, Buffer.from('🚀节点选择', 'utf16le')]);
   const groups = [{ name: '🐟漏网之鱼' }, { name: '🚀节点选择' }];
   assert.equal(detectSelectedGroupFromBuffer(Buffer.concat([oldRecord, newRecord]), groups), '🚀节点选择');
+});
+
+test('resolves nested selector chain to the selector that owns the real node', () => {
+  const proxies = new Map([
+    ['AI Sites', { type: 'Selector', now: 'Proxy Select', all: ['Proxy Select', 'US 01'] }],
+    ['Proxy Select', { type: 'Selector', now: 'Japan 01', all: ['Japan 01', 'Japan 02'] }],
+    ['Japan 01', { type: 'Vless' }],
+    ['Japan 02', { type: 'Vless' }],
+    ['US 01', { type: 'Vless' }]
+  ]);
+  assert.deepEqual(resolveEffectiveSelector(proxies, 'AI Sites'), {
+    group: 'AI Sites',
+    chain: [{ name: 'AI Sites', now: 'Proxy Select' }, { name: 'Proxy Select', now: 'Japan 01' }],
+    controlGroup: 'Proxy Select',
+    leaf: 'Japan 01'
+  });
+  assert.deepEqual(realMembers(proxies, 'AI Sites'), ['US 01']);
+  assert.deepEqual(realMembers(proxies, 'Proxy Select'), ['Japan 01', 'Japan 02']);
 });
 test('state path honors CLASH_PILOT_STATE before LocalAppData default', () => {
   const base = path.join(sandbox, 'Local App Data');

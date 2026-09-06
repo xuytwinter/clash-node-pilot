@@ -8,6 +8,7 @@ const { ControllerClient, parseConfig: parseControllerConfig, probeConfigBackend
 const { createRegionResolver, loadRegions, summarizeRegions: summarizeRegionCounts } = require('./src/core/regions');
 const { JobCoordinator } = require('./src/core/jobs');
 const { normalizeProbeUrl, requireJsonContentType, securityHeaders, validateLocalApiRequest } = require('./src/core/security');
+const connectivityCore = require('./src/core/connectivity');
 const optimizerCore = require('./src/core/optimizer');
 
 const HOST = '127.0.0.1';
@@ -30,6 +31,7 @@ const WEBVIEW_LEVELDB = path.join(
 );
 const DEFAULT_TEST_URL = 'https://www.gstatic.com/generate_204';
 const VERIFY_TEST_URL = 'https://cp.cloudflare.com/generate_204';
+const CONNECTIVITY_TEST_URLS = connectivityCore.DEFAULT_CONNECTIVITY_TARGETS;
 const TARGET_GROUP = process.env.CLASH_TARGET_GROUP || '🐟漏网之鱼';
 const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
@@ -48,7 +50,7 @@ function migrateLegacyState(statePath = resolveStatePath(), legacyPath = LEGACY_
   return true;
 }
 const STATE_PATH = resolveStatePath();
-const runtime = { history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
+const runtime = { history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, nextConnectivityCheckAt: null, monitorOnly: false, selectedBackend: null, settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000, connectivityCheckMinutes: 1, connectivityTimeoutMs: 5000 } };
 const coordinator = new JobCoordinator();
 
 function loadRuntimeState() {
@@ -59,6 +61,7 @@ function loadRuntimeState() {
     runtime.lastResults = saved.lastResults || null;
     runtime.monitorOnly = Boolean(saved.monitorOnly);
     runtime.nextRunAt = saved.nextRunAt || null;
+    runtime.nextConnectivityCheckAt = saved.nextConnectivityCheckAt || null;
     runtime.locks = new Map(Object.entries(saved.locks || {}).map(([key, value]) => [key, Number(value)]));
     runtime.lastAuto = new Map(Object.entries(saved.lastAuto || {}));
     runtime.settings = { ...runtime.settings, ...(saved.settings || {}) };
@@ -70,7 +73,7 @@ function persistRuntimeState() {
   try {
     fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
     const temporary = `${STATE_PATH}.tmp`;
-    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, lastResults: runtime.lastResults, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings, selectedBackend: runtime.selectedBackend }, null, 2), 'utf8');
+    fsSync.writeFileSync(temporary, JSON.stringify({ history: runtime.history, health: runtime.health, lastResults: runtime.lastResults, monitorOnly: runtime.monitorOnly, nextRunAt: runtime.nextRunAt, nextConnectivityCheckAt: runtime.nextConnectivityCheckAt, locks: Object.fromEntries(runtime.locks), lastAuto: Object.fromEntries(runtime.lastAuto), settings: runtime.settings, selectedBackend: runtime.selectedBackend }, null, 2), 'utf8');
     fsSync.renameSync(temporary, STATE_PATH);
   } catch { /* state persistence must not stop proxy switching */ }
 }
@@ -283,7 +286,9 @@ function updateSettings(settings = {}) {
     autoIntervalMinutes: Object.hasOwn(input, 'autoIntervalMinutes') ? boundedNumber(input.autoIntervalMinutes, runtime.settings.autoIntervalMinutes, 1, 60) : runtime.settings.autoIntervalMinutes,
     switchThresholdMs: Object.hasOwn(input, 'switchThresholdMs') ? boundedNumber(input.switchThresholdMs, runtime.settings.switchThresholdMs, 0, 500) : runtime.settings.switchThresholdMs,
     samples: Object.hasOwn(input, 'samples') ? boundedNumber(input.samples, runtime.settings.samples, 1, 5) : runtime.settings.samples,
-    manualPauseMinutes: Object.hasOwn(input, 'manualPauseMinutes') ? boundedNumber(input.manualPauseMinutes, runtime.settings.manualPauseMinutes, 1, 1440) : runtime.settings.manualPauseMinutes
+    manualPauseMinutes: Object.hasOwn(input, 'manualPauseMinutes') ? boundedNumber(input.manualPauseMinutes, runtime.settings.manualPauseMinutes, 1, 1440) : runtime.settings.manualPauseMinutes,
+    connectivityCheckMinutes: Object.hasOwn(input, 'connectivityCheckMinutes') ? boundedNumber(input.connectivityCheckMinutes, runtime.settings.connectivityCheckMinutes, 1, 30) : runtime.settings.connectivityCheckMinutes,
+    connectivityTimeoutMs: Object.hasOwn(input, 'connectivityTimeoutMs') ? boundedNumber(input.connectivityTimeoutMs, runtime.settings.connectivityTimeoutMs, 1000, 10000) : runtime.settings.connectivityTimeoutMs
   };
 }
 
@@ -334,6 +339,146 @@ function healthScore(result, scope = {}) {
 
 async function mapLimit(items, limit, mapper, options = {}) {
   return optimizerCore.mapLimit(items, limit, mapper, options);
+}
+
+async function measureTargets(name, targets, timeout, request, job = null) {
+  const checks = [];
+  for (const target of targets) {
+    optimizerCore.throwIfAborted(job?.signal);
+    checks.push({ ...target, ...(await measureNode(name, target.url, timeout, request)) });
+  }
+  const okChecks = checks.filter((item) => item.ok);
+  return {
+    name,
+    ok: okChecks.length === checks.length,
+    delay: okChecks.length ? Math.max(...okChecks.map((item) => item.delay)) : null,
+    checks,
+    successCount: okChecks.length,
+    failureCount: checks.length - okChecks.length
+  };
+}
+
+function realMembers(proxies, groupName) {
+  return connectivityCore.realMembers(proxies, groupName, optimizerCore.GROUP_TYPES);
+}
+
+function resolveEffectiveSelector(proxies, groupName) {
+  return connectivityCore.resolveEffectiveSelector(proxies, groupName);
+}
+
+async function runConnectivityHeal(body = {}) {
+  const backend = await activeBackend();
+  if (!backend) throw apiError('No supported Clash/Mihomo controller is online', 503, 'controller-offline');
+  const now = Date.now();
+
+  return coordinator.run('connectivity-heal', { backend, timeoutMs: jobBudgetFromBody(body, 60000) }, async (job) => {
+    runtime.nextConnectivityCheckAt = new Date(now + runtime.settings.connectivityCheckMinutes * 60000).toISOString();
+    persistRuntimeState();
+
+    const request = controllerRequestForBackend(backend, job);
+    const { proxies, groups } = await inventoryForBackend(backend, request);
+    const selected = backend.id === 'clash-verge' ? await selectedUiGroup(groups) : null;
+    const groupNames = connectivityCore.connectivityGroupCandidates(proxies, groups, selected, TARGET_GROUP);
+    const checkedControls = new Set();
+    const attempts = [];
+    const targets = CONNECTIVITY_TEST_URLS;
+    const timeout = boundedNumber(body.timeout, runtime.settings.connectivityTimeoutMs, 1000, 10000);
+
+    for (const groupName of groupNames) {
+      const resolved = resolveEffectiveSelector(proxies, groupName);
+      const controlGroup = resolved.controlGroup;
+      if (checkedControls.has(controlGroup)) continue;
+      checkedControls.add(controlGroup);
+      job.group = controlGroup;
+
+      if (resolved.unsupported || !resolved.leaf || !connectivityCore.isRealNode(proxies, resolved.leaf, optimizerCore.GROUP_TYPES)) {
+        attempts.push({ group: groupName, controlGroup, skipped: true, reason: '当前选择不是可安全控制的真实节点', code: 'unsupported-selector-chain', resolved });
+        continue;
+      }
+
+      const locked = lockRemainingFor(backend, controlGroup);
+      if (locked > 0) {
+        attempts.push({ group: groupName, controlGroup, skipped: true, reason: '手动保护中', code: 'manual-protection', lockMs: locked, resolved });
+        continue;
+      }
+
+      const previousAuto = getLastAuto(backend, controlGroup);
+      if (previousAuto && previousAuto !== resolved.leaf) {
+        const lockMs = lockGroup(backend, controlGroup);
+        persistRuntimeState();
+        attempts.push({ group: groupName, controlGroup, skipped: true, reason: '检测到手动切换，已暂停保通切换', code: 'external-change', lockMs, resolved });
+        continue;
+      }
+
+      const scope = scopedHealth(backend, controlGroup);
+      const current = await measureTargets(resolved.leaf, targets, timeout, request, job);
+      updateHealth([current], scope);
+      if (current.ok) {
+        setLastAuto(backend, controlGroup, resolved.leaf);
+        attempts.push({ group: groupName, controlGroup, skipped: true, reason: '当前 Google/OpenAI 探测链路健康', code: 'current-healthy', resolved, current });
+        continue;
+      }
+
+      const members = realMembers(proxies, controlGroup).filter((name) => name !== resolved.leaf);
+      const currentRegion = regionFor(resolved.leaf);
+      const sameRegion = currentRegion === 'other' ? [] : members.filter((name) => regionFor(name) === currentRegion);
+      const alternatives = members.filter((name) => !sameRegion.includes(name));
+      const batches = [
+        { fallbackFrom: null, candidates: sameRegion },
+        { fallbackFrom: currentRegion === 'other' ? null : currentRegion, candidates: alternatives }
+      ].filter((batch) => batch.candidates.length > 0);
+
+      let results = [];
+      let best = null;
+      let fallbackFrom = null;
+      for (const batch of batches) {
+        const batchResults = await mapLimit(batch.candidates, 4, (name) => measureTargets(name, targets, timeout, request, job), { signal: job.signal });
+        updateHealth(batchResults, scope);
+        batchResults.sort((a, b) => (a.ok ? healthScore(a, scope) : Infinity) - (b.ok ? healthScore(b, scope) : Infinity));
+        results = batchResults;
+        best = batchResults.find((item) => item.ok);
+        fallbackFrom = batch.fallbackFrom;
+        if (best) break;
+      }
+
+      if (!best) {
+        const targetIds = targets.map((target) => target.id);
+        const targetSummary = connectivityCore.targetOutageSummary(current, results, targetIds);
+        const code = connectivityCore.hasLikelyTargetOutage(current, results, targetIds) ? 'target-service-outage' : 'all-candidates-failed';
+        const attempt = { group: groupName, controlGroup, skipped: true, reason: code === 'target-service-outage' ? '目标探测服务可能不可用，保持当前节点' : '候选节点无法同时通过 Google/OpenAI 保通检查', code, resolved, current, fallbackFrom, results, targetSummary };
+        attempts.push(attempt);
+        if (code === 'target-service-outage') return { status: 200, body: { jobId: job.id, source: 'connectivity-heal', backend: backend.id, ...attempt, attempts } };
+        continue;
+      }
+
+      const decision = await applySelectorDecision({
+        backend,
+        request,
+        group: { name: controlGroup, now: resolved.leaf },
+        target: best.name,
+        allowSwitch: body.switch !== false,
+        jobKind: 'heal'
+      });
+      setLastAuto(backend, controlGroup, decision.active);
+      const entry = { group: groupName, controlGroup, skipped: false, reason: 'Google/OpenAI 探测链路失败，已选择健康备用节点', code: decision.reasonCode, resolved, previous: resolved.leaf, active: decision.active, current, best, switched: decision.switched, fallbackFrom, results };
+      return { status: 200, body: { jobId: job.id, source: 'connectivity-heal', backend: backend.id, ...entry, attempts: [...attempts, entry] } };
+    }
+
+    return { status: 200, body: { jobId: job.id, source: 'connectivity-heal', backend: backend.id, skipped: true, reason: '未发现需要切换的 Google/OpenAI 出站链路', code: 'no-actionable-group', attempts } };
+  });
+}
+
+function recordConnectivityResult(result) {
+  runtime.lastResults = {
+    at: new Date().toISOString(),
+    source: 'connectivity-heal',
+    backend: result.backend,
+    group: result.controlGroup || result.group,
+    active: result.active,
+    reasonCode: result.code,
+    results: (result.results || []).map(({ name, delay, ok, checks }) => ({ name, delay, ok, checks: checks?.map(({ id, ok, delay, error }) => ({ id, ok, delay, error })) }))
+  };
+  addHistory({ source: 'connectivity-heal', ...result });
 }
 
 function apiError(message, status = 400, code = 'bad-request') {
@@ -509,6 +654,38 @@ async function runAutomaticOptimize(body = {}) {
   });
 }
 
+async function runScheduledOptimize(body = {}) {
+  const now = Date.now();
+  const nextRunAt = Date.parse(runtime.nextRunAt || '');
+  const nextConnectivityCheckAt = Date.parse(runtime.nextConnectivityCheckAt || '');
+  const optimizationDue = body.force || !Number.isFinite(nextRunAt) || nextRunAt <= now;
+  const connectivityDue = body.force || !Number.isFinite(nextConnectivityCheckAt) || nextConnectivityCheckAt <= now;
+
+  if (connectivityDue) {
+    const heal = await runConnectivityHeal({ ...body, switch: true });
+    persistRuntimeState();
+    const result = heal.body;
+    if (!result.skipped || result.code === 'target-service-outage' || result.code === 'all-candidates-failed') {
+      recordConnectivityResult(result);
+      persistRuntimeState();
+      return heal;
+    }
+  }
+
+  if (optimizationDue) return runAutomaticOptimize({ ...body, force: true });
+
+  return {
+    status: 200,
+    body: {
+      skipped: true,
+      reason: 'Not due yet',
+      code: 'not-due',
+      nextRunAt: runtime.nextRunAt,
+      nextConnectivityCheckAt: runtime.nextConnectivityCheckAt
+    }
+  };
+}
+
 async function readJson(req) {
   const chunks = [];
   let size = 0;
@@ -561,7 +738,7 @@ async function apiHandler(req, res, url) {
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
       targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
-      automation: { running: Boolean(currentJob), currentJob, startedAt: currentJob?.startedAt || null, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemainingFor(backend, targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
+      automation: { running: Boolean(currentJob), currentJob, startedAt: currentJob?.startedAt || null, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, nextConnectivityCheckAt: runtime.nextConnectivityCheckAt, lockMs: targetGroup ? lockRemainingFor(backend, targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
   }
@@ -610,10 +787,18 @@ async function apiHandler(req, res, url) {
     const result = await runManualOptimize(body);
     return sendJson(res, result.status, result.body);
   }
+  if (req.method === 'POST' && url.pathname === '/api/connectivity-heal') {
+    const body = await readJson(req);
+    if (Object.hasOwn(body, 'switch') && typeof body.switch !== 'boolean') throw apiError('switch must be a boolean', 400, 'invalid-switch');
+    const result = await runConnectivityHeal(body);
+    recordConnectivityResult(result.body);
+    persistRuntimeState();
+    return sendJson(res, result.status, result.body);
+  }
   if (req.method === 'POST' && url.pathname === '/api/auto-optimize') {
     const body = req.headers['content-length'] === '0' ? {} : await readJson(req);
     if (Object.hasOwn(body, 'force') && typeof body.force !== 'boolean') throw apiError('force must be a boolean', 400, 'invalid-force');
-    const result = await runAutomaticOptimize(body);
+    const result = await runScheduledOptimize(body);
     return sendJson(res, result.status, result.body);
   }
   sendJson(res, 404, { error: 'Not found' });
@@ -658,4 +843,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer, resolvePilotDataDir, resolveStatePath, migrateLegacyState, server };
+module.exports = { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer, resolvePilotDataDir, resolveStatePath, migrateLegacyState, resolveEffectiveSelector, realMembers, server };
