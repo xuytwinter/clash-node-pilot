@@ -62,7 +62,9 @@ class JobCoordinator {
     this.current = job;
 
     try {
-      return await handler(job);
+      const result = await handler(job);
+      if (job.signal.aborted) throw job.signal.reason || new JobCancelledError();
+      return result;
     } catch (error) {
       if (job.signal.aborted) throw job.signal.reason || new JobCancelledError();
       throw error;

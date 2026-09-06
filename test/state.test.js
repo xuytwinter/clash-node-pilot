@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   STATE_SCHEMA_VERSION,
+  assertSupportedStateSchema,
   sanitizeHealth,
   sanitizeRuntimeSnapshot,
   sanitizeSettings
@@ -63,6 +64,17 @@ test('runtime snapshot sanitizer upgrades schema and discards expired or malform
   assert.equal(snapshot.health['backend|group|JP%2001'].success, 0);
   assert.equal(snapshot.health['backend|group|JP%2001'].failure, 3);
   assert.deepEqual(snapshot.health['backend|group|JP%2001'].latencies, [50, 60]);
+});
+
+test('future runtime schema is rejected instead of silently downgraded', () => {
+  assert.throws(
+    () => assertSupportedStateSchema({ schemaVersion: STATE_SCHEMA_VERSION + 1 }),
+    { code: 'state-future-schema' }
+  );
+  assert.throws(
+    () => sanitizeRuntimeSnapshot({ schemaVersion: STATE_SCHEMA_VERSION + 1 }, defaults),
+    { code: 'state-future-schema' }
+  );
 });
 
 test('health sanitizer keeps malformed encoded keys loadable', () => {

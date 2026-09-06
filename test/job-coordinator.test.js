@@ -35,3 +35,18 @@ test('job coordinator cancellation propagates through the job signal', async () 
   assert.equal(coordinator.snapshot(), null);
   assert.equal(coordinator.cancel(), false);
 });
+
+test('job coordinator rejects late success after cancellation', async () => {
+  const coordinator = new JobCoordinator({ now: () => 3000 });
+  let finish;
+  const running = coordinator.run('manual-optimize', { timeoutMs: 5000 }, async () => {
+    await new Promise((resolve) => { finish = resolve; });
+    return 'late success';
+  });
+
+  assert.equal(coordinator.cancel('stop requested'), true);
+  finish();
+
+  await assert.rejects(running, { name: 'JobCancelledError', code: 'job-cancelled', status: 409 });
+  assert.equal(coordinator.snapshot(), null);
+});

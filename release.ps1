@@ -76,6 +76,7 @@ $items = @(
   'SECURITY.md',
   'RELEASE_NOTES.md',
   'server.js',
+  'src',
   'regions.json',
   'public',
   'start-clash-node-pilot.cmd',
@@ -100,6 +101,96 @@ foreach ($name in $forbidden) {
   if (Test-Path (Join-Path $stageDir $name)) { throw "Forbidden path included in staging: $name" }
 }
 if (-not (Test-Path (Join-Path $stageDir 'runtime\node.exe'))) { throw 'runtime/node.exe missing from staging' }
+
+$requiredRuntimeFiles = @(
+  'server.js',
+  'src\core\controller.js',
+  'src\core\optimizer.js',
+  'src\core\security.js',
+  'src\core\state.js'
+)
+foreach ($item in $requiredRuntimeFiles) {
+  if (-not (Test-Path (Join-Path $stageDir $item))) { throw "Required runtime file missing from staging: $item" }
+}
+
+function Get-FreeTcpPort {
+  $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse('127.0.0.1'), 0)
+  try {
+    $listener.Start()
+    return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+  } finally {
+    $listener.Stop()
+  }
+}
+
+function Test-PilotLaunch {
+  param([string]$AppDir)
+
+  $smokeDir = Join-Path $buildDir ("smoke-" + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $smokeDir -Force | Out-Null
+  $configPath = Join-Path $smokeDir 'config.yaml'
+  Set-Content -LiteralPath $configPath -Value 'external-controller: 127.0.0.1:9' -Encoding UTF8
+  $port = Get-FreeTcpPort
+  $processInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $processInfo.FileName = Join-Path $AppDir 'runtime\node.exe'
+  $serverScript = Join-Path $AppDir 'server.js'
+  $processInfo.Arguments = "`"$serverScript`""
+  $processInfo.WorkingDirectory = $AppDir
+  $processInfo.UseShellExecute = $false
+  $processInfo.RedirectStandardOutput = $true
+  $processInfo.RedirectStandardError = $true
+  $processInfo.CreateNoWindow = $true
+  $processInfo.Environment['PORT'] = [string]$port
+  $processInfo.Environment['CLASH_CONFIG'] = $configPath
+  $processInfo.Environment['CLASH_PILOT_STATE'] = Join-Path $smokeDir 'state.json'
+  $processInfo.Environment['CLASH_PILOT_DEMO'] = '1'
+  $processInfo.Environment['CLASH_PILOT_DISABLE_AUTO_LOOP'] = '1'
+  $processInfo.Environment['CLASH_PILOT_DISABLE_OS_INTEGRATION'] = '1'
+  $processInfo.Environment['APPDATA'] = Join-Path $smokeDir 'Roaming'
+  $processInfo.Environment['LOCALAPPDATA'] = Join-Path $smokeDir 'Local'
+  $process = [System.Diagnostics.Process]::Start($processInfo)
+  try {
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    $healthy = $false
+    while ([DateTime]::UtcNow -lt $deadline) {
+      if ($process.HasExited) { break }
+      try {
+        $response = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -TimeoutSec 2
+        if ($response.ok -eq $true -and [int]$response.port -eq $port) {
+          $healthy = $true
+          break
+        }
+      } catch {
+        Start-Sleep -Milliseconds 250
+      }
+    }
+    if (-not $healthy) {
+      if (-not $process.HasExited) {
+        $process.Kill()
+        $process.WaitForExit(5000) | Out-Null
+      }
+      $stdout = $process.StandardOutput.ReadToEnd()
+      $stderr = $process.StandardError.ReadToEnd()
+      throw "Portable launch smoke failed for $AppDir. stdout=$stdout stderr=$stderr"
+    }
+  } finally {
+    if (-not $process.HasExited) {
+      $process.Kill()
+      $process.WaitForExit(5000) | Out-Null
+    }
+    Remove-Item -LiteralPath $smokeDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
+$checkFiles = @(
+  (Join-Path $stageDir 'server.js'),
+  (Join-Path $stageDir 'public\app.js')
+) + (Get-ChildItem -LiteralPath (Join-Path $stageDir 'src') -Recurse -Filter *.js | ForEach-Object { $_.FullName })
+foreach ($file in $checkFiles) {
+  & $nodeExe --check $file
+  if ($LASTEXITCODE -ne 0) { throw "Syntax check failed in staged file: $file" }
+}
+Test-PilotLaunch -AppDir $stageDir
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zipStream = [System.IO.File]::Open($zipPath, [System.IO.FileMode]::CreateNew)
@@ -130,6 +221,14 @@ try {
 } finally {
   $zipStream.Dispose()
 }
+
+$extractDir = Join-Path $buildDir 'extract-smoke'
+Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force
+$extractedAppDir = Join-Path $extractDir $stageName
+if (-not (Test-Path $extractedAppDir)) { throw "Extracted release directory missing: $stageName" }
+Test-PilotLaunch -AppDir $extractedAppDir
+
 $releaseHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
 "$releaseHash  $zipName" | Set-Content -LiteralPath $shaPath -Encoding ASCII
 

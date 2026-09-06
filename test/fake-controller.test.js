@@ -2,9 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 
-const { ControllerClient } = require('../src/core/controller');
+const { ControllerClient, safeBackend } = require('../src/core/controller');
 const {
   healthScore,
+  mapLimit,
   measureNode,
   measureNodeStable,
   scopedNodeKey,
@@ -115,6 +116,56 @@ test('controller client rejects invalid JSON and forbids redirect following', as
   });
   await assert.rejects(() => client.request('/version'), { code: 'invalid-controller-json', status: 502 });
   assert.equal(requestOptions.redirect, 'error');
+});
+
+test('safeBackend uses an explicit browser DTO allowlist', () => {
+  const safe = safeBackend({
+    id: 'custom',
+    name: 'Custom Clash/Mihomo',
+    online: true,
+    version: 'fake',
+    configPath: 'C:/Users/private/config.yaml',
+    secret: 'top-secret',
+    token: 'hidden',
+    config: { controller: 'http://127.0.0.1:9097', secret: 'top-secret', subscriptionUrl: 'hidden' },
+    capabilities: { switching: 'supported', configPath: 'hidden' },
+    diagnostic: { code: 'controller-unavailable', message: 'Controller is unavailable', detail: 'hidden' }
+  });
+  assert.deepEqual(Object.keys(safe).sort(), ['capabilities', 'config', 'diagnostic', 'hasSecret', 'id', 'mode', 'name', 'online', 'version', 'writable'].sort());
+  assert.equal(JSON.stringify(safe).includes('top-secret'), false);
+  assert.equal(JSON.stringify(safe).includes('config.yaml'), false);
+  assert.equal(JSON.stringify(safe).includes('subscriptionUrl'), false);
+  assert.deepEqual(safe.capabilities, { switching: 'supported' });
+  assert.deepEqual(safe.diagnostic, { code: 'controller-unavailable', message: 'Controller is unavailable' });
+});
+
+test('mapLimit drains running workers before returning the first failure', async () => {
+  let releaseSlow;
+  let slowFinished = false;
+  const running = mapLimit(['fail', 'slow', 'not-started'], 2, async (item) => {
+    if (item === 'fail') throw new Error('first failure');
+    if (item === 'slow') {
+      await new Promise((resolve) => { releaseSlow = resolve; });
+      slowFinished = true;
+      return item;
+    }
+    throw new Error('new work should not start after first failure');
+  }).then(
+    () => ({ ok: true }),
+    (error) => ({ ok: false, error })
+  );
+
+  await new Promise((resolve) => setImmediate(resolve));
+  let settled = false;
+  running.then(() => { settled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+
+  releaseSlow();
+  const result = await running;
+  assert.equal(result.ok, false);
+  assert.equal(result.error.message, 'first failure');
+  assert.equal(slowFinished, true);
 });
 
 test('health tracking records partial sample failures under backend and group scope', () => {

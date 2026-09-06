@@ -17,31 +17,57 @@ function normalizeHostname(hostname) {
   return String(hostname || '').trim().toLowerCase().replace(/^\[(.*)\]$/, '$1');
 }
 
+function parsePort(value) {
+  if (value === undefined || value === '') return null;
+  if (!/^\d+$/.test(value)) return null;
+  const port = Number(value);
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+}
+
 function parseHostHeader(hostHeader) {
   if (typeof hostHeader !== 'string' || !hostHeader.trim()) return null;
-  try {
-    const url = new URL(`http://${hostHeader}`);
-    return { hostname: normalizeHostname(url.hostname), port: url.port };
-  } catch {
-    return null;
+  const value = hostHeader.trim();
+  if (value !== hostHeader || /[@/?#]/.test(value)) return null;
+
+  let host;
+  let portText;
+  if (value.startsWith('[')) {
+    const match = value.match(/^\[([^\]]+)\](?::(\d+))?$/);
+    if (!match) return null;
+    host = match[1];
+    portText = match[2];
+  } else {
+    const match = value.match(/^([^:]+)(?::(\d+))?$/);
+    if (!match) return null;
+    host = match[1];
+    portText = match[2];
   }
+  const port = parsePort(portText);
+  if (portText !== undefined && port === null) return null;
+  return { hostname: normalizeHostname(host), port };
 }
 
 function isAllowedHostHeader(hostHeader, { port, allowedHosts = DEFAULT_ALLOWED_HOSTS } = {}) {
   const parsed = parseHostHeader(hostHeader);
   if (!parsed) return false;
   if (!allowedHosts.has(parsed.hostname)) return false;
-  return !parsed.port || !port || Number(parsed.port) === Number(port);
+  if (!port) return true;
+  const effectivePort = parsed.port || 80;
+  return effectivePort === Number(port);
 }
 
-function isSameLocalOrigin(value, { port, allowedHosts = DEFAULT_ALLOWED_HOSTS } = {}) {
+function isSameLocalOrigin(value, { port, allowedHosts = DEFAULT_ALLOWED_HOSTS, protocol = 'http:', serialized = false } = {}) {
   if (typeof value !== 'string' || !value.trim()) return true;
   try {
+    if (serialized && value.trim() !== value) return false;
     const origin = new URL(value);
-    if (origin.protocol !== 'http:' && origin.protocol !== 'https:') return false;
+    if (origin.protocol !== protocol) return false;
+    if (serialized && value !== origin.origin) return false;
     const hostname = normalizeHostname(origin.hostname);
     if (!allowedHosts.has(hostname)) return false;
-    return !origin.port || !port || Number(origin.port) === Number(port);
+    if (!port) return true;
+    const effectivePort = origin.port ? Number(origin.port) : (origin.protocol === 'https:' ? 443 : 80);
+    return effectivePort === Number(port);
   } catch {
     return false;
   }
@@ -56,7 +82,7 @@ function validateLocalApiRequest(req, { port } = {}) {
   const origin = req.headers.origin;
   const referer = req.headers.referer;
   const fetchSite = req.headers['sec-fetch-site'];
-  if (origin && !isSameLocalOrigin(origin, { port })) {
+  if (origin && !isSameLocalOrigin(origin, { port, serialized: true })) {
     throw securityError('Rejected cross-origin request', 'cross-origin-request', 403);
   }
   if (!origin && referer && !isSameLocalOrigin(referer, { port })) {

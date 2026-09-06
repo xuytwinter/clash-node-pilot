@@ -14,12 +14,41 @@ function authHeaders(secret, headers = {}) {
   return secret ? { ...headers, Authorization: `Bearer ${secret}` } : { ...headers };
 }
 
-function safeBackend(backend) {
-  const { config, configPath, secret, ...rest } = backend;
+function pickString(value) {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function safeCapabilities(capabilities) {
+  if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) return undefined;
+  const allowed = ['discovery', 'authenticatedControl', 'switching', 'startupBackground', 'readOnly'];
+  const safe = {};
+  for (const key of allowed) {
+    if (typeof capabilities[key] === 'string') safe[key] = capabilities[key];
+  }
+  return Object.keys(safe).length ? safe : undefined;
+}
+
+function safeDiagnostic(diagnostic) {
+  if (!diagnostic || typeof diagnostic !== 'object' || Array.isArray(diagnostic)) return undefined;
   return {
-    ...rest,
-    config: config ? { controller: config.controller, hasSecret: Boolean(config.secret) } : undefined,
-    hasSecret: Boolean(secret || config?.secret)
+    code: pickString(diagnostic.code) || 'unknown',
+    message: pickString(diagnostic.message) || 'Backend diagnostic is unavailable'
+  };
+}
+
+function safeBackend(backend = {}) {
+  const config = backend.config && typeof backend.config === 'object' ? backend.config : null;
+  return {
+    id: pickString(backend.id) || 'unknown',
+    name: pickString(backend.name) || 'Unknown backend',
+    online: Boolean(backend.online),
+    writable: typeof backend.writable === 'boolean' ? backend.writable : undefined,
+    mode: pickString(backend.mode),
+    version: pickString(backend.version),
+    config: config ? { controller: pickString(config.controller), hasSecret: Boolean(config.secret) } : undefined,
+    hasSecret: Boolean(backend.secret || config?.secret),
+    capabilities: safeCapabilities(backend.capabilities),
+    diagnostic: safeDiagnostic(backend.diagnostic)
   };
 }
 

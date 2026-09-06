@@ -1,5 +1,21 @@
 const STATE_SCHEMA_VERSION = 2;
 
+function stateSchemaError(message, code) {
+  return Object.assign(new Error(message), { code });
+}
+
+function assertSupportedStateSchema(saved) {
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return;
+  if (!Object.hasOwn(saved, 'schemaVersion') || saved.schemaVersion === undefined || saved.schemaVersion === null) return;
+  const version = Number(saved.schemaVersion);
+  if (!Number.isInteger(version) || version < 0) {
+    throw stateSchemaError('Runtime state schema version is invalid', 'state-invalid-schema');
+  }
+  if (version > STATE_SCHEMA_VERSION) {
+    throw stateSchemaError('Runtime state was written by a newer version', 'state-future-schema');
+  }
+}
+
 function clampNumber(value, fallback, min, max, { integer = true } = {}) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
@@ -84,6 +100,7 @@ function sanitizeDiagnostics(input) {
 
 function sanitizeRuntimeSnapshot(saved, defaults, { now = Date.now() } = {}) {
   const source = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+  assertSupportedStateSchema(source);
   return {
     schemaVersion: STATE_SCHEMA_VERSION,
     history: Array.isArray(source.history) ? source.history.filter((item) => item && typeof item === 'object').slice(0, 100) : [],
@@ -102,6 +119,7 @@ function sanitizeRuntimeSnapshot(saved, defaults, { now = Date.now() } = {}) {
 
 module.exports = {
   STATE_SCHEMA_VERSION,
+  assertSupportedStateSchema,
   clampNumber,
   sanitizeHealth,
   sanitizeRuntimeSnapshot,

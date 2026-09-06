@@ -26,15 +26,27 @@ function scopedNodeKey(scope = {}, name) {
 async function mapLimit(items, limit, mapper, options = {}) {
   const results = new Array(items.length);
   let cursor = 0;
+  let firstError = null;
+  const captureError = (error) => {
+    if (!firstError) firstError = error;
+  };
+
   async function worker() {
-    while (cursor < items.length) {
-      throwIfAborted(options.signal);
-      const index = cursor++;
-      results[index] = await mapper(items[index], index);
-      throwIfAborted(options.signal);
+    while (cursor < items.length && !firstError) {
+      try {
+        throwIfAborted(options.signal);
+        const index = cursor++;
+        results[index] = await mapper(items[index], index);
+        throwIfAborted(options.signal);
+      } catch (error) {
+        captureError(error);
+        break;
+      }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  await Promise.allSettled(Array.from({ length: Math.min(limit, items.length) }, worker));
+  throwIfAborted(options.signal);
+  if (firstError) throw firstError;
   return results;
 }
 

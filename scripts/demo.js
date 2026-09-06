@@ -133,10 +133,14 @@ async function main() {
   process.env.CLASH_PILOT_STATE = path.join(demoRoot, 'state.json');
   process.env.CLASH_TARGET_GROUP = 'Proxy Select';
   process.env.PORT = String(pilotPort);
+  process.env.CLASH_PILOT_DEMO = '1';
+  process.env.CLASH_PILOT_DISABLE_OS_INTEGRATION = '1';
+  process.env.CLASH_PILOT_DISABLE_AUTO_LOOP = '1';
+  delete process.env.V2RAYN_HOME;
 
   const { server } = require('../server');
-  await listen(server, pilotPort);
-  console.log(`Clash Node Pilot demo: http://${HOST}:${pilotPort}`);
+  const boundPilotPort = await listen(server, pilotPort);
+  console.log(`Clash Node Pilot demo: http://${HOST}:${boundPilotPort}`);
   console.log(`Fake Mihomo Controller: http://${HOST}:${fakePort}`);
   console.log(`Scenario: ${options.scenario}`);
   console.log(`Automatic checks: ${options.auto ? 'enabled' : 'disabled'}`);
@@ -145,7 +149,7 @@ async function main() {
 
   if (!options.auto) return;
   const runScheduledCheck = () => {
-    fetch(`http://${HOST}:${pilotPort}/api/auto-optimize`, {
+    fetch(`http://${HOST}:${boundPilotPort}/api/auto-optimize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}'

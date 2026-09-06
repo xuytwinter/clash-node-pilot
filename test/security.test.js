@@ -15,7 +15,7 @@ process.env.CLASH_PILOT_DISABLE_AUTO_LOOP = '1';
 process.env.PORT = '0';
 
 const { server } = require('../server');
-const { normalizeControllerUrl, normalizeProbeUrl } = require('../src/core/security');
+const { isAllowedHostHeader, isSameLocalOrigin, normalizeControllerUrl, normalizeProbeUrl } = require('../src/core/security');
 
 function listen(app) {
   return new Promise((resolve) => app.listen(0, '127.0.0.1', () => resolve(app.address().port)));
@@ -55,6 +55,20 @@ test('controller and probe URLs are constrained to local controllers and trusted
   assert.throws(() => normalizeProbeUrl('https://example.com/generate_204'), { code: 'probe-url-not-allowed' });
 });
 
+test('host and origin validation requires strict syntax and matching effective port', () => {
+  assert.equal(isAllowedHostHeader('localhost:3210', { port: 3210 }), true);
+  assert.equal(isAllowedHostHeader('[::1]:3210', { port: 3210 }), true);
+  assert.equal(isAllowedHostHeader('localhost', { port: 3210 }), false);
+  assert.equal(isAllowedHostHeader('other@localhost:3210', { port: 3210 }), false);
+  assert.equal(isAllowedHostHeader('localhost:3210/path', { port: 3210 }), false);
+
+  assert.equal(isSameLocalOrigin('http://localhost:3210', { port: 3210, serialized: true }), true);
+  assert.equal(isSameLocalOrigin('http://localhost', { port: 3210, serialized: true }), false);
+  assert.equal(isSameLocalOrigin('https://localhost:3210', { port: 3210, serialized: true }), false);
+  assert.equal(isSameLocalOrigin('http://localhost:3210/path', { port: 3210, serialized: true }), false);
+  assert.equal(isSameLocalOrigin('http://localhost:3210/path', { port: 3210 }), true);
+});
+
 test('local HTTP API rejects hostile request boundaries before routing', async () => {
   const port = await listen(server);
   try {
@@ -66,6 +80,10 @@ test('local HTTP API rejects hostile request boundaries before routing', async (
     assert.equal(badHost.status, 403);
     assert.match(badHost.body, /invalid-host/);
 
+    const malformedHost = await request(port, { headers: { Host: `other@localhost:${port}` } });
+    assert.equal(malformedHost.status, 403);
+    assert.match(malformedHost.body, /invalid-host/);
+
     const badOrigin = await request(port, {
       path: '/api/automation',
       method: 'POST',
@@ -74,6 +92,15 @@ test('local HTTP API rejects hostile request boundaries before routing', async (
     });
     assert.equal(badOrigin.status, 403);
     assert.match(badOrigin.body, /cross-origin-request/);
+
+    const defaultPortOrigin = await request(port, {
+      path: '/api/automation',
+      method: 'POST',
+      headers: { Origin: 'http://localhost', 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+    assert.equal(defaultPortOrigin.status, 403);
+    assert.match(defaultPortOrigin.body, /cross-origin-request/);
 
     const wrongContentType = await request(port, { path: '/api/automation', method: 'POST', body: '{}' });
     assert.equal(wrongContentType.status, 415);

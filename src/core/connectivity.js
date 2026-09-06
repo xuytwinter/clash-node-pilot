@@ -56,16 +56,46 @@ function connectivityGroupCandidates(proxies, groups, selectedName, fallbackGrou
 }
 
 function targetOutageSummary(current, results, targetIds) {
-  const checks = [current, ...results].flatMap((result) => result?.checks || []);
+  const checks = [current, ...results].flatMap((result) => (result?.checks || []).map((check) => ({ node: result.name, ...check })));
   return targetIds.map((id) => {
     const targetChecks = checks.filter((check) => check.id === id);
     const successes = targetChecks.filter((check) => check.ok).length;
-    return { id, checks: targetChecks.length, successes, allFailed: targetChecks.length > 0 && successes === 0 };
+    const nodes = unique(targetChecks.map((check) => check.node));
+    return { id, checks: targetChecks.length, nodes: nodes.length, successes, allFailed: targetChecks.length > 0 && successes === 0 };
   });
 }
 
+function targetOutageDiagnosis(current, results, targetIds) {
+  const summary = targetOutageSummary(current, results, targetIds);
+  const covered = summary.filter((item) => item.checks > 0);
+  const allCoveredTargetsFailed = covered.length > 0 && covered.every((item) => item.successes === 0);
+  if (allCoveredTargetsFailed) {
+    return {
+      code: 'common-probe-failure',
+      confidence: 'indeterminate',
+      targetSummary: summary
+    };
+  }
+
+  const likelyTarget = covered.find((item) => item.nodes >= 2 && item.allFailed);
+  if (likelyTarget && covered.some((item) => item.id !== likelyTarget.id && item.successes > 0)) {
+    return {
+      code: 'target-service-outage',
+      confidence: 'likely',
+      targetId: likelyTarget.id,
+      targetSummary: summary
+    };
+  }
+
+  return {
+    code: 'all-candidates-failed',
+    confidence: 'unknown',
+    targetSummary: summary
+  };
+}
+
 function hasLikelyTargetOutage(current, results, targetIds) {
-  return targetOutageSummary(current, results, targetIds).some((item) => item.allFailed);
+  return targetOutageDiagnosis(current, results, targetIds).code === 'target-service-outage';
 }
 
 module.exports = {
@@ -75,6 +105,7 @@ module.exports = {
   isRealNode,
   realMembers,
   resolveEffectiveSelector,
+  targetOutageDiagnosis,
   targetOutageSummary,
   unique
 };

@@ -14,6 +14,8 @@ const optimizerCore = require('./src/core/optimizer');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 3210);
+const DEMO_MODE = process.env.CLASH_PILOT_DEMO === '1';
+const OS_INTEGRATION_DISABLED = DEMO_MODE || process.env.CLASH_PILOT_DISABLE_OS_INTEGRATION === '1';
 const STATIC_ROOT = path.join(__dirname, 'public');
 const VERGE_CONFIG_PATH = path.join(
   process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
@@ -22,9 +24,11 @@ const VERGE_CONFIG_PATH = path.join(
 );
 const CFW_CONFIG_PATH = path.join(os.homedir(), '.config', 'clash', 'config.yaml');
 const MIHOMO_BACKENDS = [
-  ...(process.env.CLASH_CONFIG ? [{ id: 'custom', name: 'Custom Clash/Mihomo', configPath: process.env.CLASH_CONFIG }] : []),
-  { id: 'clash-verge', name: 'Clash Verge Rev', configPath: VERGE_CONFIG_PATH },
-  { id: 'clash-for-windows', name: 'Clash for Windows', configPath: CFW_CONFIG_PATH }
+  ...(process.env.CLASH_CONFIG ? [{ id: DEMO_MODE ? 'demo' : 'custom', name: DEMO_MODE ? 'Demo Fake Mihomo' : 'Custom Clash/Mihomo', configPath: process.env.CLASH_CONFIG }] : []),
+  ...(!DEMO_MODE ? [
+    { id: 'clash-verge', name: 'Clash Verge Rev', configPath: VERGE_CONFIG_PATH },
+    { id: 'clash-for-windows', name: 'Clash for Windows', configPath: CFW_CONFIG_PATH }
+  ] : [])
 ];
 const WEBVIEW_LEVELDB = path.join(
   process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
@@ -60,31 +64,56 @@ function addDiagnostic(code, message) {
   runtime.diagnostics = runtime.diagnostics.slice(0, 50);
 }
 
+function applyRuntimeSnapshot(saved) {
+  runtime.history = saved.history;
+  runtime.health = saved.health;
+  runtime.lastResults = saved.lastResults;
+  runtime.monitorOnly = saved.monitorOnly;
+  runtime.nextRunAt = saved.nextRunAt;
+  runtime.nextConnectivityCheckAt = saved.nextConnectivityCheckAt;
+  runtime.locks = new Map(Object.entries(saved.locks));
+  runtime.lastAuto = new Map(Object.entries(saved.lastAuto));
+  runtime.settings = saved.settings;
+  runtime.selectedBackend = saved.selectedBackend;
+  runtime.diagnostics = saved.diagnostics;
+}
+
+function readRuntimeSnapshot(filePath) {
+  const text = fsSync.readFileSync(filePath, 'utf8');
+  const parsed = JSON.parse(text);
+  return {
+    upgraded: parsed?.schemaVersion !== STATE_SCHEMA_VERSION,
+    saved: sanitizeRuntimeSnapshot(parsed, DEFAULT_SETTINGS)
+  };
+}
+
+function preserveUnreadableState(error) {
+  const suffix = error.code === 'state-future-schema' ? 'future' : 'invalid';
+  const preserved = `${STATE_PATH}.${suffix}`;
+  fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
+  fsSync.copyFileSync(STATE_PATH, preserved);
+  return preserved;
+}
+
 function loadRuntimeState() {
   try {
-    const text = fsSync.readFileSync(STATE_PATH, 'utf8');
-    const parsed = JSON.parse(text);
-    const upgraded = parsed?.schemaVersion !== STATE_SCHEMA_VERSION;
-    const saved = sanitizeRuntimeSnapshot(parsed, DEFAULT_SETTINGS);
-    runtime.history = saved.history;
-    runtime.health = saved.health;
-    runtime.lastResults = saved.lastResults;
-    runtime.monitorOnly = saved.monitorOnly;
-    runtime.nextRunAt = saved.nextRunAt;
-    runtime.nextConnectivityCheckAt = saved.nextConnectivityCheckAt;
-    runtime.locks = new Map(Object.entries(saved.locks));
-    runtime.lastAuto = new Map(Object.entries(saved.lastAuto));
-    runtime.settings = saved.settings;
-    runtime.selectedBackend = saved.selectedBackend;
-    runtime.diagnostics = saved.diagnostics;
+    const { saved, upgraded } = readRuntimeSnapshot(STATE_PATH);
+    applyRuntimeSnapshot(saved);
     if (upgraded) addDiagnostic('state-upgraded', 'Runtime state was upgraded to the current schema');
   } catch (error) {
     if (error.code === 'ENOENT') return;
-    addDiagnostic('state-load-failed', 'Runtime state could not be loaded and was ignored');
+    let preserved = null;
     try {
-      fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
-      fsSync.copyFileSync(STATE_PATH, `${STATE_PATH}.invalid`);
+      preserved = preserveUnreadableState(error);
     } catch { /* best-effort corrupt state preservation */ }
+    try {
+      const { saved } = readRuntimeSnapshot(`${STATE_PATH}.bak`);
+      applyRuntimeSnapshot(saved);
+      addDiagnostic('state-restored-from-backup', 'Runtime state was restored from the last backup');
+      addDiagnostic(error.code || 'state-load-failed', preserved ? `Current runtime state was preserved at ${path.basename(preserved)}` : 'Current runtime state could not be loaded');
+    } catch {
+      addDiagnostic(error.code || 'state-load-failed', preserved ? `Runtime state could not be loaded; preserved at ${path.basename(preserved)}` : 'Runtime state could not be loaded and was ignored');
+    }
   }
 }
 
@@ -144,6 +173,7 @@ async function discoverBackends() {
 }
 
 function discoverV2rayNHome() {
+  if (OS_INTEGRATION_DISABLED) return null;
   if (process.env.V2RAYN_HOME && fsSync.existsSync(path.join(process.env.V2RAYN_HOME, 'v2rayN.exe'))) return process.env.V2RAYN_HOME;
   if (process.platform !== 'win32') return null;
   try {
@@ -173,6 +203,7 @@ function detectV2rayN() {
 }
 
 function startupStatus() {
+  if (OS_INTEGRATION_DISABLED) return { supported: false, enabled: false, source: null, disabled: true, reason: DEMO_MODE ? 'demo-mode' : 'os-integration-disabled' };
   if (process.platform !== 'win32') return { supported: false, enabled: false, source: null };
   try {
     execFileSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Clash Node Pilot Startup'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
@@ -188,6 +219,7 @@ function startupStatus() {
 }
 
 function setStartupEnabled(enabled) {
+  if (OS_INTEGRATION_DISABLED) throw Object.assign(new Error('Startup management is disabled in demo mode'), { status: 403, code: 'startup-disabled' });
   if (process.platform !== 'win32') throw new Error('Startup management is currently available on Windows only');
   const current = startupStatus();
   if (!enabled && current.source === 'scheduled-task') throw new Error('当前使用管理员恢复任务，请以管理员身份运行 uninstall-autostart.ps1 关闭');
@@ -469,27 +501,35 @@ async function runConnectivityHeal(body = {}) {
       ].filter((batch) => batch.candidates.length > 0);
 
       let results = [];
+      const resultBatches = [];
       let best = null;
       let fallbackFrom = null;
       for (const batch of batches) {
         const batchResults = await mapLimit(batch.candidates, 4, (name) => measureTargets(name, targets, timeout, request, job), { signal: job.signal });
         updateHealth(batchResults, scope);
         batchResults.sort((a, b) => (a.ok ? healthScore(a, scope) : Infinity) - (b.ok ? healthScore(b, scope) : Infinity));
+        resultBatches.push({ fallbackFrom: batch.fallbackFrom, candidates: [...batch.candidates], results: batchResults });
         results = batchResults;
         best = batchResults.find((item) => item.ok);
         fallbackFrom = batch.fallbackFrom;
         if (best) break;
       }
+      const evidenceResults = resultBatches.flatMap((batch) => batch.results);
 
       if (!best) {
         const targetIds = targets.map((target) => target.id);
-        const targetSummary = connectivityCore.targetOutageSummary(current, results, targetIds);
-        const code = connectivityCore.hasLikelyTargetOutage(current, results, targetIds) ? 'target-service-outage' : 'all-candidates-failed';
-        const attempt = { group: groupName, controlGroup, skipped: true, reason: code === 'target-service-outage' ? '目标探测服务可能不可用，保持当前节点' : '候选节点无法同时通过 Google/OpenAI 保通检查', code, resolved, current, fallbackFrom, results, targetSummary };
+        const diagnosis = connectivityCore.targetOutageDiagnosis(current, evidenceResults, targetIds);
+        const reason = {
+          'target-service-outage': '目标探测服务可能不可用，保持当前节点',
+          'common-probe-failure': '所有探测目标在所有候选节点上均失败，无法判断是目标故障还是本地网络不可用',
+          'all-candidates-failed': '候选节点无法同时通过 Google/OpenAI 保通检查'
+        }[diagnosis.code] || '候选节点无法同时通过 Google/OpenAI 保通检查';
+        const attempt = { group: groupName, controlGroup, skipped: true, reason, code: diagnosis.code, diagnosis: diagnosis.confidence, resolved, current, fallbackFrom, results: evidenceResults, resultBatches, targetSummary: diagnosis.targetSummary };
         attempts.push(attempt);
-        if (code === 'target-service-outage') return { status: 200, body: { jobId: job.id, source: 'connectivity-heal', backend: backend.id, ...attempt, attempts } };
+        if (diagnosis.code === 'target-service-outage' || diagnosis.code === 'common-probe-failure') return { status: 200, body: { jobId: job.id, source: 'connectivity-heal', backend: backend.id, ...attempt, attempts } };
         continue;
       }
+      const orderedResults = [best, ...evidenceResults.filter((item) => item.name !== best.name)];
 
       const decision = await applySelectorDecision({
         backend,
@@ -500,7 +540,7 @@ async function runConnectivityHeal(body = {}) {
         jobKind: 'heal'
       });
       setLastAuto(backend, controlGroup, decision.active);
-      const entry = { group: groupName, controlGroup, skipped: false, reason: 'Google/OpenAI 探测链路失败，已选择健康备用节点', code: decision.reasonCode, resolved, previous: resolved.leaf, active: decision.active, current, best, switched: decision.switched, fallbackFrom, results };
+      const entry = { group: groupName, controlGroup, skipped: false, reason: 'Google/OpenAI 探测链路失败，已选择健康备用节点', code: decision.reasonCode, resolved, previous: resolved.leaf, active: decision.active, current, best, switched: decision.switched, fallbackFrom, results: orderedResults, resultBatches };
       return { status: 200, body: { jobId: job.id, source: 'connectivity-heal', backend: backend.id, ...entry, attempts: [...attempts, entry] } };
     }
 
@@ -706,7 +746,7 @@ async function runScheduledOptimize(body = {}) {
     const heal = await runConnectivityHeal({ ...body, switch: true });
     persistRuntimeState();
     const result = heal.body;
-    if (!result.skipped || result.code === 'target-service-outage' || result.code === 'all-candidates-failed') {
+    if (!result.skipped || result.code === 'target-service-outage' || result.code === 'common-probe-failure' || result.code === 'all-candidates-failed') {
       recordConnectivityResult(result);
       persistRuntimeState();
       return heal;
@@ -749,6 +789,11 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+function listeningPort() {
+  const address = server.address();
+  return address && typeof address === 'object' ? address.port : PORT;
+}
+
 async function apiHandler(req, res, url) {
   if (!['GET', 'POST'].includes(req.method)) {
     return sendJson(res, 405, { error: 'Method not allowed', code: 'method-not-allowed' });
@@ -761,7 +806,7 @@ async function apiHandler(req, res, url) {
       name: 'Clash Node Pilot',
       version: require('./package.json').version,
       host: HOST,
-      port: PORT
+      port: listeningPort()
     });
   }
   if (req.method === 'GET' && url.pathname === '/api/status') {
@@ -859,7 +904,7 @@ async function staticHandler(res, url) {
 
 const server = http.createServer({ maxHeaderSize: 8192 }, async (req, res) => {
   try {
-    validateLocalApiRequest(req, { port: PORT });
+    validateLocalApiRequest(req, { port: listeningPort() });
     const url = new URL(req.url, `http://${req.headers.host || HOST}`);
     if (url.pathname.startsWith('/api/')) await apiHandler(req, res, url);
     else await staticHandler(res, url);
@@ -872,10 +917,11 @@ const server = http.createServer({ maxHeaderSize: 8192 }, async (req, res) => {
 
 if (require.main === module) {
   server.listen(PORT, HOST, () => {
-    console.log(`Clash Node Pilot: http://${HOST}:${PORT}`);
+    const boundPort = listeningPort();
+    console.log(`Clash Node Pilot: http://${HOST}:${boundPort}`);
     if (process.env.CLASH_PILOT_DISABLE_AUTO_LOOP !== '1') {
       const runAutomaticCheck = async () => {
-        await fetch(`http://${HOST}:${PORT}/api/auto-optimize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+        await fetch(`http://${HOST}:${boundPort}/api/auto-optimize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
         const nextRunAt = Date.parse(runtime.nextRunAt || '');
         const delay = Number.isFinite(nextRunAt) ? Math.min(60000, Math.max(5000, nextRunAt - Date.now())) : 30000;
         setTimeout(runAutomaticCheck, delay);
