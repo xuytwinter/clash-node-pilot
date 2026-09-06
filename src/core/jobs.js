@@ -26,7 +26,7 @@ class JobCoordinator {
 
   snapshot() {
     if (!this.current) return null;
-    const { abortController, signal, timeoutHandle, ...visible } = this.current;
+    const { abortController, signal, timeoutHandle, beginCommit, ...visible } = this.current;
     return { ...visible };
   }
 
@@ -53,7 +53,15 @@ class JobCoordinator {
       timeoutMs,
       abortController,
       signal: abortController.signal,
-      timeoutHandle: null
+      timeoutHandle: null,
+      commitStarted: false,
+      commitStartedAt: null,
+      beginCommit: () => {
+        if (abortController.signal.aborted) throw abortController.signal.reason || new JobCancelledError();
+        job.commitStarted = true;
+        job.commitStartedAt = new Date(this.now()).toISOString();
+        job.status = 'committing';
+      }
     };
     job.timeoutHandle = setTimeout(() => {
       abortController.abort(new JobCancelledError('Optimization job exceeded its time budget', 'job-timeout'));
@@ -63,10 +71,10 @@ class JobCoordinator {
 
     try {
       const result = await handler(job);
-      if (job.signal.aborted) throw job.signal.reason || new JobCancelledError();
+      if (job.signal.aborted && !job.commitStarted) throw job.signal.reason || new JobCancelledError();
       return result;
     } catch (error) {
-      if (job.signal.aborted) throw job.signal.reason || new JobCancelledError();
+      if (job.signal.aborted && !job.commitStarted) throw job.signal.reason || new JobCancelledError();
       throw error;
     } finally {
       clearTimeout(job.timeoutHandle);

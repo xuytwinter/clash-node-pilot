@@ -10,6 +10,7 @@ const { JobCoordinator } = require('./src/core/jobs');
 const { normalizeProbeUrl, requireJsonContentType, securityHeaders, validateLocalApiRequest } = require('./src/core/security');
 const { STATE_SCHEMA_VERSION, clampNumber, sanitizeRuntimeSnapshot } = require('./src/core/state');
 const connectivityCore = require('./src/core/connectivity');
+const decisionCore = require('./src/core/decision');
 const optimizerCore = require('./src/core/optimizer');
 
 const HOST = '127.0.0.1';
@@ -39,6 +40,8 @@ const VERIFY_TEST_URL = 'https://cp.cloudflare.com/generate_204';
 const CONNECTIVITY_TEST_URLS = connectivityCore.DEFAULT_CONNECTIVITY_TARGETS;
 const TARGET_GROUP = process.env.CLASH_TARGET_GROUP || '🐟漏网之鱼';
 const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
+const SWITCH_COOLDOWN_MINUTES = Number(process.env.SWITCH_COOLDOWN_MINUTES || 5);
+const HEALTH_HALF_LIFE_MINUTES = Number(process.env.HEALTH_HALF_LIFE_MINUTES || 60);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
 const DEFAULT_JOB_BUDGET_MS = 120000;
 const LEGACY_STATE_PATH = path.join(__dirname, 'data', 'state.json');
@@ -55,13 +58,23 @@ function migrateLegacyState(statePath = resolveStatePath(), legacyPath = LEGACY_
   return true;
 }
 const STATE_PATH = resolveStatePath();
-const DEFAULT_SETTINGS = { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000, connectivityCheckMinutes: 1, connectivityTimeoutMs: 5000 };
+const DEFAULT_SETTINGS = {
+  autoIntervalMinutes: 3,
+  switchThresholdMs: SWITCH_THRESHOLD_MS,
+  switchCooldownMinutes: SWITCH_COOLDOWN_MINUTES,
+  healthHalfLifeMinutes: HEALTH_HALF_LIFE_MINUTES,
+  samples: 2,
+  manualPauseMinutes: MANUAL_PAUSE_MS / 60000,
+  connectivityCheckMinutes: 1,
+  connectivityTimeoutMs: 5000
+};
 const runtime = {
   history: [],
   health: {},
   lastResults: null,
   locks: new Map(),
   lastAuto: new Map(),
+  lastSwitch: new Map(),
   nextRunAt: null,
   nextConnectivityCheckAt: null,
   monitorOnly: false,
@@ -100,6 +113,7 @@ function applyRuntimeSnapshot(saved) {
   runtime.nextConnectivityCheckAt = saved.nextConnectivityCheckAt;
   runtime.locks = new Map(Object.entries(saved.locks));
   runtime.lastAuto = new Map(Object.entries(saved.lastAuto));
+  runtime.lastSwitch = new Map(Object.entries(saved.lastSwitch));
   runtime.settings = saved.settings;
   runtime.selectedBackend = saved.selectedBackend;
   runtime.diagnostics = saved.diagnostics;
@@ -181,6 +195,7 @@ function persistRuntimeState() {
       nextConnectivityCheckAt: runtime.nextConnectivityCheckAt,
       locks: Object.fromEntries(runtime.locks),
       lastAuto: Object.fromEntries(runtime.lastAuto),
+      lastSwitch: Object.fromEntries(runtime.lastSwitch),
       settings: runtime.settings,
       selectedBackend: runtime.selectedBackend,
       diagnostics: runtime.diagnostics
@@ -288,7 +303,11 @@ async function activeBackend() {
 
 function controllerRequestForBackend(backend, job = null) {
   const client = new ControllerClient({ controller: backend.config.controller, secret: backend.config.secret });
-  return (route, options = {}) => client.request(route, { ...options, signal: options.signal || job?.signal });
+  return (route, options = {}) => {
+    const requestOptions = { ...options };
+    if (!Object.hasOwn(requestOptions, 'signal')) requestOptions.signal = job?.signal;
+    return client.request(route, requestOptions);
+  };
 }
 
 async function controllerRequest(route, options = {}) {
@@ -397,6 +416,15 @@ function clearLastAuto(backend, groupName) {
   runtime.lastAuto.delete(groupName);
 }
 
+function getLastSwitch(backend, groupName) {
+  return runtime.lastSwitch.get(scopedGroupKey(backend, groupName)) || runtime.lastSwitch.get(groupName);
+}
+
+function setLastSwitch(backend, groupName, value = Date.now()) {
+  runtime.lastSwitch.set(scopedGroupKey(backend, groupName), value);
+  runtime.lastSwitch.delete(groupName);
+}
+
 function boundedNumber(value, fallback, min, max, { integer = true } = {}) {
   return clampNumber(value, fallback, min, max, { integer });
 }
@@ -410,6 +438,8 @@ function updateSettings(settings = {}) {
   runtime.settings = {
     autoIntervalMinutes: Object.hasOwn(input, 'autoIntervalMinutes') ? boundedNumber(input.autoIntervalMinutes, runtime.settings.autoIntervalMinutes, 1, 60) : runtime.settings.autoIntervalMinutes,
     switchThresholdMs: Object.hasOwn(input, 'switchThresholdMs') ? boundedNumber(input.switchThresholdMs, runtime.settings.switchThresholdMs, 0, 500) : runtime.settings.switchThresholdMs,
+    switchCooldownMinutes: Object.hasOwn(input, 'switchCooldownMinutes') ? boundedNumber(input.switchCooldownMinutes, runtime.settings.switchCooldownMinutes, 0, 1440) : runtime.settings.switchCooldownMinutes,
+    healthHalfLifeMinutes: Object.hasOwn(input, 'healthHalfLifeMinutes') ? boundedNumber(input.healthHalfLifeMinutes, runtime.settings.healthHalfLifeMinutes, 1, 10080) : runtime.settings.healthHalfLifeMinutes,
     samples: Object.hasOwn(input, 'samples') ? boundedNumber(input.samples, runtime.settings.samples, 1, 5) : runtime.settings.samples,
     manualPauseMinutes: Object.hasOwn(input, 'manualPauseMinutes') ? boundedNumber(input.manualPauseMinutes, runtime.settings.manualPauseMinutes, 1, 1440) : runtime.settings.manualPauseMinutes,
     connectivityCheckMinutes: Object.hasOwn(input, 'connectivityCheckMinutes') ? boundedNumber(input.connectivityCheckMinutes, runtime.settings.connectivityCheckMinutes, 1, 30) : runtime.settings.connectivityCheckMinutes,
@@ -428,7 +458,7 @@ async function readGroupNow(request, groupName) {
   return active;
 }
 
-async function applySelectorDecision({ backend, request, group, target, allowSwitch, jobKind }) {
+async function applySelectorDecision({ backend, request, group, target, allowSwitch, jobKind, job = null }) {
   if (!allowSwitch) return { active: group.now, switched: false, reasonCode: 'switch-disabled' };
   if (runtime.monitorOnly) return { active: group.now, switched: false, reasonCode: 'monitor-only' };
   if (group.now === target) return { active: group.now, switched: false, reasonCode: 'already-active' };
@@ -440,26 +470,66 @@ async function applySelectorDecision({ backend, request, group, target, allowSwi
     return { active: current, switched: false, reasonCode: 'external-change', lockMs };
   }
 
-  await request(`/proxies/${encodeURIComponent(group.name)}`, {
+  optimizerCore.throwIfAborted(job?.signal);
+  job?.beginCommit?.();
+  const commitRequest = (route, options = {}) => request(route, { ...options, signal: null });
+  await commitRequest(`/proxies/${encodeURIComponent(group.name)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
     body: JSON.stringify({ name: target })
   });
-  const active = await readGroupNow(request, group.name);
+  const active = await readGroupNow(commitRequest, group.name);
   const switched = active === target;
   if (switched && jobKind === 'manual') {
     lockGroup(backend, group.name);
     persistRuntimeState();
   }
-  return { active, switched, reasonCode: switched ? 'switched' : 'write-not-applied' };
+  if (switched) setLastSwitch(backend, group.name);
+  return {
+    active,
+    switched,
+    reasonCode: switched ? 'switched' : 'write-not-applied',
+    commit: {
+      started: true,
+      verified: switched,
+      cancelPolicy: 'finish-after-commit-started',
+      cancelledAfterCommit: Boolean(job?.signal?.aborted)
+    }
+  };
 }
 
 function updateHealth(results, scope = {}) {
-  optimizerCore.updateHealth(runtime.health, results, scope);
+  optimizerCore.updateHealth(runtime.health, results, scope, {
+    healthHalfLifeMinutes: runtime.settings.healthHalfLifeMinutes
+  });
 }
 
 function healthScore(result, scope = {}) {
-  return optimizerCore.healthScore(result, runtime.health, scope);
+  return decisionCore.scoreNode(result, runtime.health[optimizerCore.scopedNodeKey(scope, result.name)] || runtime.health[result.name], optimizerCore.scopedNodeKey(scope, result.name), runtime.settings).score;
+}
+
+function healthByName(results, scope = {}) {
+  const entries = {};
+  for (const result of results) {
+    entries[result.name] = runtime.health[optimizerCore.scopedNodeKey(scope, result.name)] || runtime.health[result.name];
+  }
+  return entries;
+}
+
+function scoredResult(score) {
+  if (!score?.result) return null;
+  return {
+    ...score.result,
+    score: score.scoreMs,
+    scoring: {
+      components: score.components,
+      evidence: score.evidence
+    }
+  };
+}
+
+function scoredResultsFromDecision(decisionEvent) {
+  return (decisionEvent.evidence?.ranked || []).map(scoredResult).filter(Boolean);
 }
 
 async function mapLimit(items, limit, mapper, options = {}) {
@@ -588,12 +658,13 @@ async function runConnectivityHeal(body = {}) {
         backend,
         request,
         group: { name: controlGroup, now: resolved.leaf },
-        target: best.name,
-        allowSwitch: body.switch !== false,
-        jobKind: 'heal'
+      target: best.name,
+      allowSwitch: body.switch !== false,
+      jobKind: 'heal',
+      job
       });
       setLastAuto(backend, controlGroup, decision.active);
-      const entry = { group: groupName, controlGroup, skipped: false, reason: 'Google/OpenAI 探测链路失败，已选择健康备用节点', code: decision.reasonCode, resolved, previous: resolved.leaf, active: decision.active, current, best, switched: decision.switched, fallbackFrom, results: orderedResults, resultBatches };
+      const entry = { group: groupName, controlGroup, skipped: false, reason: 'Google/OpenAI 探测链路失败，已选择健康备用节点', code: decision.reasonCode, resolved, previous: resolved.leaf, active: decision.active, current, best, switched: decision.switched, fallbackFrom, results: orderedResults, resultBatches, commit: decision.commit };
       return { status: 200, body: { jobId: job.id, source: 'connectivity-heal', backend: backend.id, ...entry, attempts: [...attempts, entry] } };
     }
 
@@ -654,7 +725,8 @@ async function runManualOptimize(body) {
       group,
       target: best.name,
       allowSwitch: body.switch !== false,
-      jobKind: 'manual'
+      jobKind: 'manual',
+      job
     });
     return {
       status: 200,
@@ -668,6 +740,7 @@ async function runManualOptimize(body) {
         best,
         switched: decision.switched,
         reasonCode: decision.reasonCode,
+        commit: decision.commit,
         lockMs: decision.lockMs || lockRemainingFor(backend, group.name),
         results
       }
@@ -718,20 +791,24 @@ async function runAutomaticOptimize(body = {}) {
     const candidates = group.members.filter((name) => regionFor(name) === currentRegion);
     let results = candidates.length ? await mapLimit(candidates, 6, (name) => measureNodeStable(name, DEFAULT_TEST_URL, 5000, samples, request, job), { signal: job.signal }) : [];
     updateHealth(results, scope);
-    results.sort((a, b) => (a.ok ? healthScore(a, scope) : Infinity) - (b.ok ? healthScore(b, scope) : Infinity));
-    let best = results.find((item) => item.ok);
+    let currentResult = results.find((item) => item.name === group.now) || null;
+    let ranked = decisionCore.rankCandidates(results, healthByName(results, scope), runtime.settings, { now: Date.now(), scopeKey: scopedGroupKey(backend, group.name) });
+    let best = ranked.best?.result || null;
     let fallbackFrom = null;
+    let hardFailure = Boolean(currentResult && !currentResult.ok);
 
     if (!best) {
       fallbackFrom = currentRegion;
+      hardFailure = true;
       const alternatives = group.members.filter((name) => {
         const region = regionFor(name);
         return region !== 'other' && region !== currentRegion;
       });
       const fallbackResults = await mapLimit(alternatives, 6, (name) => measureNodeStable(name, VERIFY_TEST_URL, 5000, samples, request, job), { signal: job.signal });
       updateHealth(fallbackResults, scope);
-      fallbackResults.sort((a, b) => (a.ok ? healthScore(a, scope) : Infinity) - (b.ok ? healthScore(b, scope) : Infinity));
-      best = fallbackResults.find((item) => item.ok);
+      const decisionInputs = currentResult ? [...fallbackResults, currentResult] : fallbackResults;
+      ranked = decisionCore.rankCandidates(decisionInputs, healthByName(decisionInputs, scope), runtime.settings, { now: Date.now(), scopeKey: scopedGroupKey(backend, group.name) });
+      best = ranked.scored.filter((item) => fallbackResults.some((result) => result.name === item.name)).find((item) => item.ok)?.result || null;
       results = fallbackResults;
     }
 
@@ -741,15 +818,33 @@ async function runAutomaticOptimize(body = {}) {
       return { status: 200, body };
     }
 
-    const selectedRegion = regionFor(best.name);
-    const currentDelay = results.find((item) => item.name === group.now)?.delay ?? Infinity;
-    const improvement = currentDelay - best.delay;
-    const shouldSwitch = group.now !== best.name && (currentDelay === Infinity || improvement >= runtime.settings.switchThresholdMs);
-    let decision = { active: group.now, switched: false, reasonCode: group.now === best.name ? 'already-active' : 'below-threshold' };
-    if (shouldSwitch) decision = await applySelectorDecision({ backend, request, group, target: best.name, allowSwitch: true, jobKind: 'auto' });
+    const decisionEvent = decisionCore.decideSwitch({
+      currentName: group.now,
+      results,
+      currentResult,
+      healthByName: healthByName(currentResult ? [...results, currentResult] : results, scope),
+      settings: runtime.settings,
+      lastSwitchAt: getLastSwitch(backend, group.name),
+      allowSwitch: true,
+      monitorOnly: runtime.monitorOnly,
+      hardFailure,
+      now: Date.now(),
+      scopeKey: scopedGroupKey(backend, group.name)
+    });
+    const selectedRegion = regionFor(decisionEvent.target || best.name);
+    const orderedResults = scoredResultsFromDecision(decisionEvent);
+    best = scoredResult(decisionEvent.evidence.best) || best;
+    const improvement = decisionEvent.scoreDeltaMs;
+    let decision = { active: group.now, switched: false, reasonCode: decisionEvent.code, decisionEvent };
+    if (decisionEvent.action === 'switch') {
+      decision = {
+        ...(await applySelectorDecision({ backend, request, group, target: decisionEvent.target, allowSwitch: true, jobKind: 'auto', job })),
+        decisionEvent
+      };
+    }
 
     if (decision.reasonCode === 'external-change') {
-      const body = { skipped: true, reason: '检测到手动切换，已暂停自动切换', code: decision.reasonCode, lockMs: decision.lockMs, group: group.name, active: decision.active, results };
+      const body = { skipped: true, reason: '检测到手动切换，已暂停自动切换', code: decision.reasonCode, lockMs: decision.lockMs, group: group.name, active: decision.active, results: orderedResults, decision: decisionEvent };
       addHistory({ group: group.name, backend: backend.id, skipped: true, reason: body.reason, code: body.code, lockMs: decision.lockMs });
       return { status: 200, body };
     }
@@ -763,7 +858,8 @@ async function runAutomaticOptimize(body = {}) {
       active: decision.active,
       region: selectedRegion,
       reasonCode: decision.reasonCode,
-      results: results.map(({ name, delay, ok, error, successCount, failureCount, jitter }) => ({ name, delay, ok, error, successCount, failureCount, jitter }))
+      decision: decisionEvent,
+      results: orderedResults.map(({ name, delay, ok, error, successCount, failureCount, jitter, score, scoring }) => ({ name, delay, ok, error, successCount, failureCount, jitter, score, scoring }))
     };
     persistRuntimeState();
 
@@ -777,14 +873,15 @@ async function runAutomaticOptimize(body = {}) {
       active: decision.active,
       best,
       switched: decision.switched,
-      success: results.filter((item) => item.ok).length,
-      candidates: results.length,
+      success: orderedResults.filter((item) => item.ok).length,
+      candidates: orderedResults.length,
       improvement,
-      score: Math.round(healthScore(best, scope)),
+      score: best.score ?? Math.round(healthScore(best, scope)),
+      decision: decisionEvent,
       reasonCode: decision.reasonCode
     };
     addHistory(entry);
-    return { status: 200, body: { jobId: job.id, ...entry, lockMs: lockRemainingFor(backend, group.name), results } };
+    return { status: 200, body: { jobId: job.id, ...entry, lockMs: lockRemainingFor(backend, group.name), results: orderedResults, commit: decision.commit } };
   });
 }
 

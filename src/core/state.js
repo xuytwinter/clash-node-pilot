@@ -28,6 +28,8 @@ function sanitizeSettings(saved, defaults) {
   return {
     autoIntervalMinutes: clampNumber(source.autoIntervalMinutes, defaults.autoIntervalMinutes, 1, 60),
     switchThresholdMs: clampNumber(source.switchThresholdMs, defaults.switchThresholdMs, 0, 500),
+    switchCooldownMinutes: clampNumber(source.switchCooldownMinutes, defaults.switchCooldownMinutes, 0, 1440),
+    healthHalfLifeMinutes: clampNumber(source.healthHalfLifeMinutes, defaults.healthHalfLifeMinutes, 1, 10080),
     samples: clampNumber(source.samples, defaults.samples, 1, 5),
     manualPauseMinutes: clampNumber(source.manualPauseMinutes, defaults.manualPauseMinutes, 1, 1440),
     connectivityCheckMinutes: clampNumber(source.connectivityCheckMinutes, defaults.connectivityCheckMinutes, 1, 30),
@@ -63,8 +65,8 @@ function sanitizeHealth(input) {
   const health = {};
   for (const [key, value] of Object.entries(input)) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
-    const success = clampNumber(value.success, 0, 0, 100000);
-    const failure = clampNumber(value.failure, 0, 0, 100000);
+    const success = clampNumber(value.success, 0, 0, 100000, { integer: false });
+    const failure = clampNumber(value.failure, 0, 0, 100000, { integer: false });
     const latencies = Array.isArray(value.latencies)
       ? value.latencies.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0).slice(0, 20)
       : [];
@@ -111,6 +113,7 @@ function sanitizeRuntimeSnapshot(saved, defaults, { now = Date.now() } = {}) {
     nextConnectivityCheckAt: sanitizeTimestamp(source.nextConnectivityCheckAt),
     locks: Object.fromEntries(sanitizeMapEntries(source.locks, { now, futureOnly: true })),
     lastAuto: Object.fromEntries(sanitizeLastAuto(source.lastAuto)),
+    lastSwitch: Object.fromEntries(sanitizeMapEntries(source.lastSwitch, { now })),
     settings: sanitizeSettings(source.settings, defaults),
     selectedBackend: typeof source.selectedBackend === 'string' ? source.selectedBackend : null,
     diagnostics: sanitizeDiagnostics(source.diagnostics)

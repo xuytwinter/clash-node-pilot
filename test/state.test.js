@@ -12,6 +12,8 @@ const {
 const defaults = {
   autoIntervalMinutes: 3,
   switchThresholdMs: 25,
+  switchCooldownMinutes: 5,
+  healthHalfLifeMinutes: 60,
   samples: 2,
   manualPauseMinutes: 15,
   connectivityCheckMinutes: 1,
@@ -22,6 +24,8 @@ test('state settings sanitizer clamps invalid persisted values without losing ze
   assert.deepEqual(sanitizeSettings({
     autoIntervalMinutes: -5,
     switchThresholdMs: 0,
+    switchCooldownMinutes: -2,
+    healthHalfLifeMinutes: 20000,
     samples: 99,
     manualPauseMinutes: 'bad',
     connectivityCheckMinutes: 45,
@@ -29,6 +33,8 @@ test('state settings sanitizer clamps invalid persisted values without losing ze
   }, defaults), {
     autoIntervalMinutes: 1,
     switchThresholdMs: 0,
+    switchCooldownMinutes: 0,
+    healthHalfLifeMinutes: 10080,
     samples: 5,
     manualPauseMinutes: 15,
     connectivityCheckMinutes: 30,
@@ -46,6 +52,7 @@ test('runtime snapshot sanitizer upgrades schema and discards expired or malform
     },
     locks: { active: 2000, expired: 500, bad: 'x' },
     lastAuto: { active: 'JP 01', empty: '' },
+    lastSwitch: { recent: 1200, bad: 'x' },
     settings: { switchThresholdMs: 0 },
     selectedBackend: 'clash-verge',
     nextRunAt: 'not-a-date',
@@ -56,13 +63,14 @@ test('runtime snapshot sanitizer upgrades schema and discards expired or malform
   assert.deepEqual(snapshot.history, [{ ok: true }]);
   assert.deepEqual(snapshot.locks, { active: 2000 });
   assert.deepEqual(snapshot.lastAuto, { active: 'JP 01' });
+  assert.deepEqual(snapshot.lastSwitch, { recent: 1200 });
   assert.equal(snapshot.settings.switchThresholdMs, 0);
   assert.equal(snapshot.selectedBackend, 'clash-verge');
   assert.equal(snapshot.nextRunAt, null);
   assert.equal(snapshot.nextConnectivityCheckAt, '2026-09-06T00:00:00.000Z');
   assert.equal(snapshot.health['backend|group|JP%2001'].name, 'JP 01');
   assert.equal(snapshot.health['backend|group|JP%2001'].success, 0);
-  assert.equal(snapshot.health['backend|group|JP%2001'].failure, 3);
+  assert.equal(snapshot.health['backend|group|JP%2001'].failure, 3.8);
   assert.deepEqual(snapshot.health['backend|group|JP%2001'].latencies, [50, 60]);
 });
 

@@ -1,4 +1,5 @@
 const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
+const { DEFAULT_DECISION_SETTINGS, decayedHealth, scoreNode } = require('./decision');
 
 function throwIfAborted(signal) {
   if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : Object.assign(new Error('Operation cancelled'), { name: 'AbortError', code: 'operation-cancelled' });
@@ -94,16 +95,18 @@ async function measureNodeStable(controllerRequest, name, testUrl, timeout, samp
 }
 
 function healthScore(result, health = {}, scope = {}) {
-  const nodeHealth = health[scopedNodeKey(scope, result.name)] || health[result.name] || { success: 0, failure: 0, jitter: 0 };
-  const total = nodeHealth.success + nodeHealth.failure;
-  const failureRate = total ? nodeHealth.failure / total : 0;
-  return result.delay + failureRate * 200 + (Number(result.jitter ?? nodeHealth.jitter) || 0) * 0.5;
+  const key = scopedNodeKey(scope, result.name);
+  return scoreNode(result, health[key] || health[result.name] || {}, key).score;
 }
 
-function updateHealth(health, results, scope = {}) {
+function updateHealth(health, results, scope = {}, options = {}) {
+  const now = Number.isFinite(options.now) ? options.now : Date.now();
+  const halfLife = Math.max(60000, Number(options.healthHalfLifeMinutes || DEFAULT_DECISION_SETTINGS.healthHalfLifeMinutes) * 60000);
   for (const result of results) {
     const key = scopedNodeKey(scope, result.name);
-    const item = health[key] || { name: result.name, backendId: scope.backendId || null, group: scope.group || null, success: 0, failure: 0, latencies: [] };
+    const previous = health[key] || {};
+    const decayed = decayedHealth(previous, { now, halfLife });
+    const item = { name: result.name, backendId: scope.backendId || null, group: scope.group || null, success: decayed.success, failure: decayed.failure, latencies: Array.isArray(previous.latencies) ? previous.latencies : [] };
     item.name = result.name;
     item.backendId = scope.backendId || null;
     item.group = scope.group || null;
@@ -114,7 +117,7 @@ function updateHealth(health, results, scope = {}) {
       item.latencies = item.latencies.slice(0, 20);
       item.jitter = Number(result.jitter) || 0;
     } else item.failure += result.failureCount ?? 1;
-    item.updatedAt = new Date().toISOString();
+    item.updatedAt = new Date(now).toISOString();
     health[key] = item;
   }
 }

@@ -50,3 +50,21 @@ test('job coordinator rejects late success after cancellation', async () => {
   await assert.rejects(running, { name: 'JobCancelledError', code: 'job-cancelled', status: 409 });
   assert.equal(coordinator.snapshot(), null);
 });
+
+test('job coordinator lets an explicit commit phase finish after cancellation', async () => {
+  const coordinator = new JobCoordinator({ now: () => 4000 });
+  let finishCommit;
+  const running = coordinator.run('auto-optimize', { timeoutMs: 5000 }, async (job) => {
+    job.beginCommit();
+    await new Promise((resolve) => { finishCommit = resolve; });
+    return { committed: true };
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(coordinator.snapshot().status, 'committing');
+  assert.equal(coordinator.cancel('too late'), true);
+  finishCommit();
+
+  assert.deepEqual(await running, { committed: true });
+  assert.equal(coordinator.snapshot(), null);
+});
