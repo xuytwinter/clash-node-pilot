@@ -1,5 +1,6 @@
 const fs = require('node:fs/promises');
 const { DiagnosticCode, diagnostic } = require('./capabilities');
+const { normalizeControllerUrl } = require('./security');
 
 function parseConfig(text) {
   const value = (key) => {
@@ -7,11 +8,6 @@ function parseConfig(text) {
     return match ? match[1].replace(/^['"]|['"]$/g, '') : '';
   };
   return { controller: value('external-controller') || '127.0.0.1:9097', secret: value('secret') };
-}
-
-function normalizeControllerUrl(controller) {
-  if (!controller) return 'http://127.0.0.1:9097';
-  return /^https?:\/\//i.test(controller) ? controller.replace(/\/+$/, '') : `http://${controller.replace(/\/+$/, '')}`;
 }
 
 function authHeaders(secret, headers = {}) {

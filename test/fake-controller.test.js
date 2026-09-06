@@ -107,7 +107,7 @@ test('fake Controller rejects missing secrets without leaking them', async () =>
 test('controller client rejects invalid JSON and forbids redirect following', async () => {
   let requestOptions;
   const client = new ControllerClient({
-    controller: 'http://controller.test',
+    controller: 'http://127.0.0.1:9097',
     fetchImpl: async (url, options) => {
       requestOptions = options;
       return new Response('not-json', { status: 200, headers: { 'Content-Type': 'application/json' } });

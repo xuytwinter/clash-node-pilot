@@ -7,6 +7,7 @@ const { execFileSync } = require('node:child_process');
 const { ControllerClient, parseConfig: parseControllerConfig, probeConfigBackend, safeBackend } = require('./src/core/controller');
 const { createRegionResolver, loadRegions, summarizeRegions: summarizeRegionCounts } = require('./src/core/regions');
 const { JobCoordinator } = require('./src/core/jobs');
+const { normalizeProbeUrl, requireJsonContentType, securityHeaders, validateLocalApiRequest } = require('./src/core/security');
 const optimizerCore = require('./src/core/optimizer');
 
 const HOST = '127.0.0.1';
@@ -287,13 +288,7 @@ function updateSettings(settings = {}) {
 }
 
 function normalizeTestUrl(value) {
-  if (typeof value !== 'string' || !value.trim()) return DEFAULT_TEST_URL;
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : DEFAULT_TEST_URL;
-  } catch {
-    return DEFAULT_TEST_URL;
-  }
+  return normalizeProbeUrl(value, { allowed: new Set([DEFAULT_TEST_URL, VERIFY_TEST_URL]) });
 }
 
 async function readGroupNow(request, groupName) {
@@ -350,6 +345,9 @@ function jobBudgetFromBody(body, fallback = DEFAULT_JOB_BUDGET_MS) {
 }
 
 async function runManualOptimize(body) {
+  if (typeof body.group !== 'string' || !body.group) throw apiError('group must be a non-empty string', 400, 'invalid-group');
+  if (typeof body.region !== 'string') throw apiError('region must be a string', 400, 'invalid-region');
+  if (Object.hasOwn(body, 'switch') && typeof body.switch !== 'boolean') throw apiError('switch must be a boolean', 400, 'invalid-switch');
   const region = REGIONS.find((item) => item.id === body.region);
   if (!region) throw apiError('请选择有效地区', 400, 'invalid-region');
   const timeout = boundedNumber(body.timeout, 5000, 1000, 10000);
@@ -513,19 +511,32 @@ async function runAutomaticOptimize(body = {}) {
 
 async function readJson(req) {
   const chunks = [];
+  let size = 0;
   for await (const chunk of req) {
     chunks.push(chunk);
-    if (chunks.reduce((sum, item) => sum + item.length, 0) > 64 * 1024) throw new Error('Request body too large');
+    size += chunk.length;
+    if (size > 64 * 1024) throw apiError('Request body too large', 413, 'request-body-too-large');
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+  try {
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('JSON body must be an object');
+    return body;
+  } catch {
+    throw apiError('Request body must be valid JSON object', 400, 'invalid-json');
+  }
 }
 
 function sendJson(res, status, data) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...securityHeaders() });
   res.end(JSON.stringify(data));
 }
 
 async function apiHandler(req, res, url) {
+  if (!['GET', 'POST'].includes(req.method)) {
+    return sendJson(res, 405, { error: 'Method not allowed', code: 'method-not-allowed' });
+  }
+  if (req.method === 'POST') requireJsonContentType(req);
+
   if (req.method === 'GET' && url.pathname === '/api/health') {
     return sendJson(res, 200, {
       ok: true,
@@ -556,15 +567,19 @@ async function apiHandler(req, res, url) {
   }
   if (url.pathname === '/api/startup' && req.method === 'POST') {
     const body = await readJson(req);
-    const startup = setStartupEnabled(Boolean(body.enabled));
+    if (typeof body.enabled !== 'boolean') throw apiError('enabled must be a boolean', 400, 'invalid-enabled');
+    const startup = setStartupEnabled(body.enabled);
     return sendJson(res, 200, startup);
   }
   if (req.method === 'POST' && url.pathname === '/api/automation') {
     const body = await readJson(req);
+    const actions = new Set(['backend', 'cancel', 'lock', 'unlock', 'monitor', 'clear-history', 'settings']);
+    if (typeof body.action !== 'string' || !actions.has(body.action)) throw apiError('Unsupported automation action', 400, 'unsupported-action');
     if (body.action === 'cancel') {
       return sendJson(res, 200, { cancelled: coordinator.cancel('Cancelled from dashboard') });
     }
     if (body.action === 'backend') {
+      if (typeof body.value !== 'string') throw apiError('backend value must be a string', 400, 'invalid-backend');
       const available = await discoverBackends();
       const selected = available.find((item) => item.id === body.value && item.online);
       if (!selected) return sendJson(res, 400, { error: 'Selected backend is offline or unavailable' });
@@ -577,9 +592,13 @@ async function apiHandler(req, res, url) {
     if (!group) return sendJson(res, 404, { error: 'No active selector group' });
     if (body.action === 'lock') lockGroup(backend, group.name);
     if (body.action === 'unlock') { clearGroupLock(backend, group.name); clearLastAuto(backend, group.name); }
-    if (body.action === 'monitor') runtime.monitorOnly = Boolean(body.value);
+    if (body.action === 'monitor') {
+      if (typeof body.value !== 'boolean') throw apiError('monitor value must be a boolean', 400, 'invalid-monitor');
+      runtime.monitorOnly = body.value;
+    }
     if (body.action === 'clear-history') runtime.history = [];
     if (body.action === 'settings') {
+      if (!body.settings || typeof body.settings !== 'object' || Array.isArray(body.settings)) throw apiError('settings must be an object', 400, 'invalid-settings');
       updateSettings(body.settings);
       runtime.nextRunAt = nextAutoRunIso();
     }
@@ -593,6 +612,7 @@ async function apiHandler(req, res, url) {
   }
   if (req.method === 'POST' && url.pathname === '/api/auto-optimize') {
     const body = req.headers['content-length'] === '0' ? {} : await readJson(req);
+    if (Object.hasOwn(body, 'force') && typeof body.force !== 'boolean') throw apiError('force must be a boolean', 400, 'invalid-force');
     const result = await runAutomaticOptimize(body);
     return sendJson(res, result.status, result.body);
   }
@@ -601,16 +621,18 @@ async function apiHandler(req, res, url) {
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
 async function staticHandler(res, url) {
-  const relative = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
+  const relative = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname.slice(1));
   const file = path.resolve(STATIC_ROOT, relative);
-  if (!file.startsWith(STATIC_ROOT)) return sendJson(res, 403, { error: 'Forbidden' });
+  const containment = path.relative(STATIC_ROOT, file);
+  if (containment.startsWith('..') || path.isAbsolute(containment)) return sendJson(res, 403, { error: 'Forbidden', code: 'static-forbidden' });
   const data = await fs.readFile(file);
-  res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });
+  res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', ...securityHeaders({ html: path.extname(file) === '.html' }) });
   res.end(data);
 }
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer({ maxHeaderSize: 8192 }, async (req, res) => {
   try {
+    validateLocalApiRequest(req, { port: PORT });
     const url = new URL(req.url, `http://${req.headers.host || HOST}`);
     if (url.pathname.startsWith('/api/')) await apiHandler(req, res, url);
     else await staticHandler(res, url);
@@ -636,4 +658,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer, resolvePilotDataDir, resolveStatePath, migrateLegacyState };
+module.exports = { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer, resolvePilotDataDir, resolveStatePath, migrateLegacyState, server };
