@@ -6,7 +6,9 @@ const os = require('node:os');
 const path = require('node:path');
 
 function createFakeController() {
-  const server = http.createServer((req, res) => {
+  const state = { scenario: 'degraded', scenarios: ['healthy', 'degraded', 'target-outage'] };
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
     if (req.method === 'GET' && req.url === '/version') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ version: 'fake-demo' }));
@@ -22,10 +24,30 @@ function createFakeController() {
       }));
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/demo/state') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(state));
+      return;
+    }
+    if (req.method === 'PUT' && url.pathname === '/demo/scenario') {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+      if (!state.scenarios.includes(body.scenario)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: 'unknown scenario' }));
+        return;
+      }
+      state.scenario = body.scenario;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(state));
+      return;
+    }
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ message: 'not found' }));
   });
   return {
+    state,
     listen: () => new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port))),
     close: () => new Promise((resolve) => server.close(resolve))
   };
@@ -92,12 +114,18 @@ test('demo mode exposes only the fake backend and disables OS integrations', asy
     assert.equal(status.body.backend.id, 'demo');
     assert.equal(status.body.startup.supported, false);
     assert.equal(status.body.startup.reason, 'demo-mode');
+    assert.deepEqual(status.body.demo, { enabled: true, scenario: 'degraded', scenarios: ['healthy', 'degraded', 'target-outage'] });
     assert.equal(status.body.detectedClients.some((client) => client.id === 'clash-verge'), false);
     assert.equal(status.body.detectedClients.find((client) => client.id === 'v2rayn')?.online, false);
 
     const startup = await requestJson(pilotPort, '/api/startup', { method: 'POST', body: { enabled: true } });
     assert.equal(startup.status, 403);
     assert.equal(startup.body.code, 'startup-disabled');
+
+    const scenario = await requestJson(pilotPort, '/api/demo-scenario', { method: 'POST', body: { scenario: 'target-outage' } });
+    assert.equal(scenario.status, 200);
+    assert.equal(scenario.body.scenario, 'target-outage');
+    assert.equal(fake.state.scenario, 'target-outage');
   } finally {
     await close(server);
     await fake.close();

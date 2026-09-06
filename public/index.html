@@ -1,64 +1,75 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Clash 节点优选</title>
+  <title>Clash Node Pilot</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="mark">C</span><div><strong>节点优选</strong><span>Clash Verge 本地控制台</span></div></div>
-    <div class="header-actions"><button id="startupButton" class="startup-button" type="button">开机启动</button><a class="help-button" href="/guide.html" title="打开文档" aria-label="打开文档">文档</a><div id="connection" class="connection"><span></span>正在连接</div></div>
+    <div class="brand"><span class="mark">C</span><div><strong data-i18n="brandTitle">Node Pilot</strong><span data-i18n="brandSub">Local Mihomo control</span></div></div>
+    <div class="header-actions"><button id="langButton" class="help-button" type="button">中文</button><button id="startupButton" class="startup-button" type="button" data-i18n="startup">Startup</button><a class="help-button" href="/guide.html" title="Open docs" aria-label="Open docs" data-i18n="docs">Docs</a><div id="connection" class="connection"><span></span><span data-i18n="connecting">Connecting</span></div></div>
   </header>
   <main>
     <section class="summary">
-      <div><p class="eyebrow">当前出口</p><h1 id="activeNode">读取中...</h1><p id="activeGroup" class="muted">正在读取 Mihomo 控制器</p></div>
-      <button id="refreshButton" class="icon-button" title="刷新状态" aria-label="刷新状态">↻</button>
+      <div><p class="eyebrow" data-i18n="currentExit">Current Exit</p><h1 id="activeNode">Loading...</h1><p id="activeGroup" class="muted">Reading Mihomo controller</p></div>
+      <button id="refreshButton" class="icon-button" title="Refresh status" aria-label="Refresh status">↻</button>
     </section>
 
     <section class="workspace">
       <div class="controls">
-        <div class="control-heading"><label for="backendSelect">代理客户端</label><button id="settingsButton" class="settings-button" type="button"><span aria-hidden="true">⚙</span>自动测速设置</button></div>
+        <div class="control-heading"><label for="backendSelect" data-i18n="proxyClient">Proxy Client</label><button id="settingsButton" class="settings-button" type="button"><span aria-hidden="true">⚙</span><span data-i18n="settings">Settings</span></button></div>
         <select id="backendSelect"></select>
         <p id="clientInfo" class="automation-status"></p>
-        <label for="groupSelect">切换代理组</label>
+        <div id="demoScenarioRow" class="demo-scenario" hidden>
+          <label for="demoScenarioSelect" data-i18n="demoScenario">Demo Scenario</label>
+          <select id="demoScenarioSelect"></select>
+        </div>
+        <label for="groupSelect" data-i18n="selectorGroup">Selector Group</label>
         <select id="groupSelect"></select>
-        <label>目标地区</label>
+        <label data-i18n="targetRegion">Target Region</label>
         <div id="regions" class="regions" role="radiogroup"></div>
         <div class="settings-row">
-          <label class="check"><input id="autoSwitch" type="checkbox" checked><span>测速后自动切换</span></label>
+          <label class="check"><input id="autoSwitch" type="checkbox" checked><span data-i18n="switchAfterTest">Switch after test</span></label>
         </div>
         <div class="settings-row">
-          <label class="check"><input id="monitorOnly" type="checkbox"><span>仅监控，不切换</span></label>
-          <button id="lockButton" class="text-button" type="button">锁定 15 分钟</button>
+          <label class="check"><input id="monitorOnly" type="checkbox"><span data-i18n="monitorOnly">Monitor only</span></label>
+          <button id="lockButton" class="text-button" type="button">Lock 15 min</button>
         </div>
         <dialog id="settingsDialog" class="settings-dialog">
-          <div class="dialog-heading"><div><p class="eyebrow">节点优选</p><h2>自动测速设置</h2></div><button id="closeSettings" class="icon-button" type="button" aria-label="关闭设置">×</button></div>
+          <div class="dialog-heading"><div><p class="eyebrow" data-i18n="nodePilot">Node Pilot</p><h2 data-i18n="settingsTitle">Optimization Settings</h2></div><button id="closeSettings" class="icon-button" type="button" aria-label="Close settings">×</button></div>
           <div class="dialog-fields">
-            <label for="autoInterval">自动测速间隔（分钟）</label><input id="autoInterval" type="number" min="1" max="60" step="1">
-            <label for="testUrl">测速地址</label><input id="testUrl" type="url">
-            <label for="timeout">超时（毫秒）</label><input id="timeout" type="number" min="1000" max="10000" step="500">
-            <label for="switchThreshold">自动切换至少快多少（毫秒）</label><input id="switchThreshold" type="number" min="0" max="500" step="5">
-            <label for="samples">每个节点测速次数</label><input id="samples" type="number" min="1" max="5">
-            <label for="pauseMinutes">手动切换后暂停自动优化（分钟）</label><input id="pauseMinutes" type="number" min="1" max="1440">
-            <label for="connectivityInterval">保通检查间隔（分钟）</label><input id="connectivityInterval" type="number" min="1" max="30">
-            <label for="connectivityTimeout">保通单目标超时（毫秒）</label><input id="connectivityTimeout" type="number" min="1000" max="10000" step="500">
+            <label for="autoInterval" data-i18n="autoInterval">Auto interval (min)</label><input id="autoInterval" type="number" min="1" max="60" step="1">
+            <label for="testUrl" data-i18n="manualTestUrl">Manual probe URL</label><input id="testUrl" type="url">
+            <label for="timeout" data-i18n="manualTimeout">Manual timeout (ms)</label><input id="timeout" type="number" min="1000" max="10000" step="500">
+            <label for="switchThreshold" data-i18n="switchThreshold">Switch threshold (score ms)</label><input id="switchThreshold" type="number" min="0" max="500" step="5">
+            <label for="switchCooldown" data-i18n="switchCooldown">Switch cooldown (min)</label><input id="switchCooldown" type="number" min="0" max="1440" step="1">
+            <label for="healthHalfLife" data-i18n="healthHalfLife">Health half-life (min)</label><input id="healthHalfLife" type="number" min="1" max="10080" step="1">
+            <label for="samples" data-i18n="samples">Samples per node</label><input id="samples" type="number" min="1" max="5">
+            <label for="pauseMinutes" data-i18n="manualPause">Manual protection (min)</label><input id="pauseMinutes" type="number" min="1" max="1440">
+            <label for="connectivityInterval" data-i18n="connectivityInterval">Connectivity interval (min)</label><input id="connectivityInterval" type="number" min="1" max="30">
+            <label for="connectivityTimeout" data-i18n="connectivityTimeout">Connectivity timeout (ms)</label><input id="connectivityTimeout" type="number" min="1000" max="10000" step="500">
           </div>
-          <div class="dialog-actions"><button id="cancelSettings" class="secondary" type="button">取消</button><button id="saveSettings" class="primary compact" type="button">保存设置</button></div>
+          <p id="settingsError" class="dialog-error" role="alert"></p>
+          <div class="dialog-actions"><button id="cancelSettings" class="secondary" type="button" data-i18n="cancel">Cancel</button><button id="saveSettings" class="primary compact" type="button" data-i18n="saveSettings">Save Settings</button></div>
         </dialog>
-        <button id="optimizeButton" class="primary" disabled><span class="bolt">⚡</span><span>开始测速并优选</span></button>
-        <button id="cancelJobButton" class="secondary full" type="button" hidden>取消当前任务</button>
+        <button id="optimizeButton" class="primary" disabled><span class="bolt">⚡</span><span data-i18n="runTest">Test and Select</span></button>
+        <button id="cancelJobButton" class="secondary full" type="button" hidden>Cancel Current Job</button>
         <p id="message" class="message" aria-live="polite"></p>
-        <p id="automationStatus" class="automation-status">自动任务状态读取中...</p>
+        <p id="automationStatus" class="automation-status">Loading automation status...</p>
       </div>
 
       <div class="results-panel">
-        <div class="panel-heading"><div><p class="eyebrow">本次测速</p><h2>节点排名</h2></div><span id="resultCount" class="count">尚未测速</span></div>
-        <div id="trendHeading" class="trend-heading" hidden>最近延迟趋势</div>
-        <div id="trend" class="trend" aria-label="最近延迟趋势"></div>
-        <div id="empty" class="empty"><div class="signal">⌁</div><strong>尚未开始测速</strong><span>选择地区后，点击“开始测速并优选”查看节点排名</span></div>
+        <div class="panel-heading"><div><p class="eyebrow" data-i18n="latestRun">Latest Run</p><h2 data-i18n="ranking">Node Ranking</h2></div><span id="resultCount" class="count">No run yet</span></div>
+        <div id="decisionPanel" class="decision-panel" hidden>
+          <div><strong id="decisionTitle"></strong><span id="decisionMeta"></span></div>
+          <dl id="decisionDetails"></dl>
+        </div>
+        <div id="trendHeading" class="trend-heading" hidden>Recent Latency Trend</div>
+        <div id="trend" class="trend" aria-label="Recent latency trend"></div>
+        <div id="empty" class="empty"><div class="signal">⌁</div><strong data-i18n="emptyTitle">No measurements yet</strong><span data-i18n="emptySub">Choose a region and run a test to rank nodes</span></div>
         <div id="results" class="results"></div>
       </div>
     </section>

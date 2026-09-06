@@ -63,6 +63,8 @@ const DEFAULT_SETTINGS = {
   switchThresholdMs: SWITCH_THRESHOLD_MS,
   switchCooldownMinutes: SWITCH_COOLDOWN_MINUTES,
   healthHalfLifeMinutes: HEALTH_HALF_LIFE_MINUTES,
+  manualTestUrl: DEFAULT_TEST_URL,
+  manualTimeoutMs: 5000,
   samples: 2,
   manualPauseMinutes: MANUAL_PAUSE_MS / 60000,
   connectivityCheckMinutes: 1,
@@ -440,6 +442,8 @@ function updateSettings(settings = {}) {
     switchThresholdMs: Object.hasOwn(input, 'switchThresholdMs') ? boundedNumber(input.switchThresholdMs, runtime.settings.switchThresholdMs, 0, 500) : runtime.settings.switchThresholdMs,
     switchCooldownMinutes: Object.hasOwn(input, 'switchCooldownMinutes') ? boundedNumber(input.switchCooldownMinutes, runtime.settings.switchCooldownMinutes, 0, 1440) : runtime.settings.switchCooldownMinutes,
     healthHalfLifeMinutes: Object.hasOwn(input, 'healthHalfLifeMinutes') ? boundedNumber(input.healthHalfLifeMinutes, runtime.settings.healthHalfLifeMinutes, 1, 10080) : runtime.settings.healthHalfLifeMinutes,
+    manualTestUrl: Object.hasOwn(input, 'manualTestUrl') ? normalizeTestUrl(input.manualTestUrl) : runtime.settings.manualTestUrl,
+    manualTimeoutMs: Object.hasOwn(input, 'manualTimeoutMs') ? boundedNumber(input.manualTimeoutMs, runtime.settings.manualTimeoutMs, 1000, 10000) : runtime.settings.manualTimeoutMs,
     samples: Object.hasOwn(input, 'samples') ? boundedNumber(input.samples, runtime.settings.samples, 1, 5) : runtime.settings.samples,
     manualPauseMinutes: Object.hasOwn(input, 'manualPauseMinutes') ? boundedNumber(input.manualPauseMinutes, runtime.settings.manualPauseMinutes, 1, 1440) : runtime.settings.manualPauseMinutes,
     connectivityCheckMinutes: Object.hasOwn(input, 'connectivityCheckMinutes') ? boundedNumber(input.connectivityCheckMinutes, runtime.settings.connectivityCheckMinutes, 1, 30) : runtime.settings.connectivityCheckMinutes,
@@ -532,6 +536,56 @@ function scoredResultsFromDecision(decisionEvent) {
   return (decisionEvent.evidence?.ranked || []).map(scoredResult).filter(Boolean);
 }
 
+function compactEvidence(result) {
+  if (!result) return null;
+  return {
+    name: result.name,
+    ok: Boolean(result.ok),
+    scoreMs: result.score ?? result.delay ?? null,
+    components: result.scoring?.components || {
+      latencyMs: result.delay ?? null,
+      failurePenaltyMs: result.failureCount ? result.failureCount * 200 : 0,
+      jitterPenaltyMs: result.jitter ? Math.round(result.jitter * 0.5) : 0
+    },
+    evidence: result.scoring?.evidence || {
+      successCount: result.successCount || 0,
+      failureCount: result.failureCount || 0,
+      sampleCount: (result.successCount || 0) + (result.failureCount || 0)
+    },
+    result
+  };
+}
+
+function selectorDecisionEvent({ code, reason, currentName, active, best, current, results = [], allowSwitch = true, commit = null }) {
+  const action = code === 'target-service-outage' || code === 'common-probe-failure' || code === 'all-candidates-failed' || code === 'no-healthy-candidate'
+    ? 'uncertain'
+    : (code === 'switched' ? 'switch' : 'hold');
+  return {
+    at: new Date().toISOString(),
+    action,
+    code,
+    reason,
+    current: currentName || current?.name || active || null,
+    target: best?.name || active || null,
+    thresholdMs: null,
+    scoreDeltaMs: null,
+    protection: {
+      monitorOnly: Boolean(runtime.monitorOnly),
+      allowSwitch: Boolean(allowSwitch),
+      cooldownMs: 0,
+      remainingCooldownMs: 0,
+      cooldownBypassed: false,
+      hardFailure: Boolean(current && current.ok === false)
+    },
+    evidence: {
+      current: compactEvidence(current),
+      best: compactEvidence(best),
+      ranked: results.map(compactEvidence).filter(Boolean)
+    },
+    commit
+  };
+}
+
 async function mapLimit(items, limit, mapper, options = {}) {
   return optimizerCore.mapLimit(items, limit, mapper, options);
 }
@@ -587,13 +641,15 @@ async function runConnectivityHeal(body = {}) {
       job.group = controlGroup;
 
       if (resolved.unsupported || !resolved.leaf || !connectivityCore.isRealNode(proxies, resolved.leaf, optimizerCore.GROUP_TYPES)) {
-        attempts.push({ group: groupName, controlGroup, skipped: true, reason: '当前选择不是可安全控制的真实节点', code: 'unsupported-selector-chain', resolved });
+        const reason = '当前选择不是可安全控制的真实节点';
+        attempts.push({ group: groupName, controlGroup, skipped: true, reason, code: 'unsupported-selector-chain', resolved, decision: selectorDecisionEvent({ code: 'unsupported-selector-chain', reason, active: resolved.leaf, allowSwitch: body.switch !== false }) });
         continue;
       }
 
       const locked = lockRemainingFor(backend, controlGroup);
       if (locked > 0) {
-        attempts.push({ group: groupName, controlGroup, skipped: true, reason: '手动保护中', code: 'manual-protection', lockMs: locked, resolved });
+        const reason = '手动保护中';
+        attempts.push({ group: groupName, controlGroup, skipped: true, reason, code: 'manual-protection', lockMs: locked, resolved, decision: selectorDecisionEvent({ code: 'manual-protection', reason, active: resolved.leaf, allowSwitch: body.switch !== false }) });
         continue;
       }
 
@@ -601,7 +657,8 @@ async function runConnectivityHeal(body = {}) {
       if (previousAuto && previousAuto !== resolved.leaf) {
         const lockMs = lockGroup(backend, controlGroup);
         persistRuntimeState();
-        attempts.push({ group: groupName, controlGroup, skipped: true, reason: '检测到手动切换，已暂停保通切换', code: 'external-change', lockMs, resolved });
+        const reason = '检测到手动切换，已暂停保通切换';
+        attempts.push({ group: groupName, controlGroup, skipped: true, reason, code: 'external-change', lockMs, resolved, decision: selectorDecisionEvent({ code: 'external-change', reason, active: resolved.leaf, allowSwitch: body.switch !== false }) });
         continue;
       }
 
@@ -610,7 +667,8 @@ async function runConnectivityHeal(body = {}) {
       updateHealth([current], scope);
       if (current.ok) {
         setLastAuto(backend, controlGroup, resolved.leaf);
-        attempts.push({ group: groupName, controlGroup, skipped: true, reason: '当前 Google/OpenAI 探测链路健康', code: 'current-healthy', resolved, current });
+        const reason = '当前 Google/OpenAI 探测链路健康';
+        attempts.push({ group: groupName, controlGroup, skipped: true, reason, code: 'current-healthy', resolved, current, decision: selectorDecisionEvent({ code: 'current-healthy', reason, active: resolved.leaf, current, results: [current], allowSwitch: body.switch !== false }) });
         continue;
       }
 
@@ -647,7 +705,7 @@ async function runConnectivityHeal(body = {}) {
           'common-probe-failure': '所有探测目标在所有候选节点上均失败，无法判断是目标故障还是本地网络不可用',
           'all-candidates-failed': '候选节点无法同时通过 Google/OpenAI 保通检查'
         }[diagnosis.code] || '候选节点无法同时通过 Google/OpenAI 保通检查';
-        const attempt = { group: groupName, controlGroup, skipped: true, reason, code: diagnosis.code, diagnosis: diagnosis.confidence, resolved, current, fallbackFrom, results: evidenceResults, resultBatches, targetSummary: diagnosis.targetSummary };
+        const attempt = { group: groupName, controlGroup, skipped: true, reason, code: diagnosis.code, diagnosis: diagnosis.confidence, resolved, current, fallbackFrom, results: evidenceResults, resultBatches, targetSummary: diagnosis.targetSummary, decision: selectorDecisionEvent({ code: diagnosis.code, reason, active: resolved.leaf, current, results: evidenceResults, allowSwitch: body.switch !== false }) };
         attempts.push(attempt);
         if (diagnosis.code === 'target-service-outage' || diagnosis.code === 'common-probe-failure') return { status: 200, body: { jobId: job.id, source: 'connectivity-heal', backend: backend.id, ...attempt, attempts } };
         continue;
@@ -664,7 +722,8 @@ async function runConnectivityHeal(body = {}) {
       job
       });
       setLastAuto(backend, controlGroup, decision.active);
-      const entry = { group: groupName, controlGroup, skipped: false, reason: 'Google/OpenAI 探测链路失败，已选择健康备用节点', code: decision.reasonCode, resolved, previous: resolved.leaf, active: decision.active, current, best, switched: decision.switched, fallbackFrom, results: orderedResults, resultBatches, commit: decision.commit };
+      const reason = 'Google/OpenAI 探测链路失败，已选择健康备用节点';
+      const entry = { group: groupName, controlGroup, skipped: false, reason, code: decision.reasonCode, resolved, previous: resolved.leaf, active: decision.active, current, best, switched: decision.switched, fallbackFrom, results: orderedResults, resultBatches, commit: decision.commit, decision: selectorDecisionEvent({ code: decision.reasonCode, reason, currentName: resolved.leaf, active: decision.active, best, current, results: orderedResults, allowSwitch: body.switch !== false, commit: decision.commit }) };
       return { status: 200, body: { jobId: job.id, source: 'connectivity-heal', backend: backend.id, ...entry, attempts: [...attempts, entry] } };
     }
 
@@ -681,6 +740,7 @@ function recordConnectivityResult(result) {
     controlGroup: result.controlGroup,
     active: result.active,
     reasonCode: result.code,
+    decision: result.decision,
     results: (result.results || []).map(({ name, delay, ok, checks }) => ({ name, delay, ok, checks: checks?.map(({ id, ok, delay, error }) => ({ id, ok, delay, error })) }))
   };
   addHistory({ source: 'connectivity-heal', ...result });
@@ -700,8 +760,8 @@ async function runManualOptimize(body) {
   if (Object.hasOwn(body, 'switch') && typeof body.switch !== 'boolean') throw apiError('switch must be a boolean', 400, 'invalid-switch');
   const region = REGIONS.find((item) => item.id === body.region);
   if (!region) throw apiError('请选择有效地区', 400, 'invalid-region');
-  const timeout = boundedNumber(body.timeout, 5000, 1000, 10000);
-  const testUrl = normalizeTestUrl(body.testUrl);
+  const timeout = boundedNumber(body.timeout, runtime.settings.manualTimeoutMs, 1000, 10000);
+  const testUrl = normalizeTestUrl(body.testUrl || runtime.settings.manualTestUrl);
   const backend = await activeBackend();
   if (!backend) throw apiError('No supported Clash/Mihomo controller is online', 503, 'controller-offline');
 
@@ -728,6 +788,17 @@ async function runManualOptimize(body) {
       jobKind: 'manual',
       job
     });
+    const decisionEvent = selectorDecisionEvent({
+      code: decision.reasonCode,
+      reason: decision.reasonCode,
+      currentName: group.now,
+      active: decision.active,
+      best,
+      current: results.find((item) => item.name === group.now),
+      results,
+      allowSwitch: body.switch !== false,
+      commit: decision.commit
+    });
     return {
       status: 200,
       body: {
@@ -740,6 +811,7 @@ async function runManualOptimize(body) {
         best,
         switched: decision.switched,
         reasonCode: decision.reasonCode,
+        decision: decisionEvent,
         commit: decision.commit,
         lockMs: decision.lockMs || lockRemainingFor(backend, group.name),
         results
@@ -944,6 +1016,21 @@ function listeningPort() {
   return address && typeof address === 'object' ? address.port : PORT;
 }
 
+async function demoStatus(backend) {
+  if (!DEMO_MODE || !backend?.online) return { enabled: false };
+  try {
+    const request = controllerRequestForBackend(backend);
+    const state = await request('/demo/state', { timeout: 1000 });
+    return {
+      enabled: true,
+      scenario: state.scenario || null,
+      scenarios: state.scenarios || []
+    };
+  } catch {
+    return { enabled: true, scenario: null, scenarios: [] };
+  }
+}
+
 async function apiHandler(req, res, url) {
   if (!['GET', 'POST'].includes(req.method)) {
     return sendJson(res, 405, { error: 'Method not allowed', code: 'method-not-allowed' });
@@ -965,6 +1052,7 @@ async function apiHandler(req, res, url) {
     const discovered = await discoverBackends();
     const v2rayN = detectV2rayN();
     const currentJob = coordinator.snapshot();
+    const demo = await demoStatus(backend);
     return sendJson(res, 200, {
       connected: true,
       startup: startupStatus(),
@@ -976,9 +1064,23 @@ async function apiHandler(req, res, url) {
       targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
       automation: { running: Boolean(currentJob), currentJob, startedAt: currentJob?.startedAt || null, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, nextConnectivityCheckAt: runtime.nextConnectivityCheckAt, lockMs: targetGroup ? lockRemainingFor(backend, targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
       persistence: runtime.persistence,
+      demo,
       diagnostics: runtime.diagnostics,
-      defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
+      defaults: { testUrl: runtime.settings.manualTestUrl || DEFAULT_TEST_URL, timeout: runtime.settings.manualTimeoutMs || 5000 }
     });
+  }
+  if (DEMO_MODE && url.pathname === '/api/demo-scenario' && req.method === 'POST') {
+    const body = await readJson(req);
+    if (typeof body.scenario !== 'string' || !body.scenario) throw apiError('scenario must be a non-empty string', 400, 'invalid-scenario');
+    const backend = await activeBackend();
+    if (!backend) throw apiError('Demo controller is offline', 503, 'controller-offline');
+    const request = controllerRequestForBackend(backend);
+    await request('/demo/scenario', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ scenario: body.scenario })
+    });
+    return sendJson(res, 200, await demoStatus(backend));
   }
   if (url.pathname === '/api/startup' && req.method === 'POST') {
     const body = await readJson(req);

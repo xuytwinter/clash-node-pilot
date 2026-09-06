@@ -60,9 +60,10 @@ function nodeOutcome(name, targetUrl, scenario) {
 }
 
 function createFakeController(options) {
+  const initialActive = () => ({ 'AI Sites': 'Proxy Select', 'Proxy Select': 'Japan 01', Final: 'Proxy Select' });
   const state = {
     scenario: options.scenario,
-    active: { 'AI Sites': 'Proxy Select', 'Proxy Select': 'Japan 01', Final: 'Proxy Select' }
+    active: initialActive()
   };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${HOST}`);
@@ -109,7 +110,22 @@ function createFakeController(options) {
     }
     if (req.method === 'GET' && url.pathname === '/demo/state') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(state));
+      res.end(JSON.stringify({ ...state, scenarios: [...SCENARIOS] }));
+      return;
+    }
+    if (req.method === 'PUT' && url.pathname === '/demo/scenario') {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+      if (!SCENARIOS.has(body.scenario)) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: 'unknown scenario' }));
+        return;
+      }
+      state.scenario = body.scenario;
+      state.active = initialActive();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ...state, scenarios: [...SCENARIOS] }));
       return;
     }
     res.writeHead(404, { 'Content-Type': 'application/json' });

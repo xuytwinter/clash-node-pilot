@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 function createController({ active = 'Japan 01', delays = {}, applyPut = true } = {}) {
-  const state = { active, puts: [] };
+  const state = { active, puts: [], delayRequests: [] };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (req.method === 'GET' && url.pathname === '/version') {
@@ -28,6 +28,7 @@ function createController({ active = 'Japan 01', delays = {}, applyPut = true } 
     }
     if (req.method === 'GET' && url.pathname.startsWith('/proxies/') && url.pathname.endsWith('/delay')) {
       const name = decodeURIComponent(url.pathname.split('/')[2]);
+      state.delayRequests.push({ name, timeout: url.searchParams.get('timeout'), testUrl: url.searchParams.get('url') });
       const delay = delays[name];
       res.writeHead(delay ? 200 : 504, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(delay ? { delay } : { message: 'timeout' }));
@@ -172,5 +173,27 @@ test('selector write must be confirmed by readback before reporting switched', a
     assert.equal(response.body.active, 'Japan 01');
     assert.equal(response.body.commit.verified, false);
     assert.deepEqual(fake.state.puts, ['Japan 02']);
+  });
+});
+
+test('manual optimization uses persisted probe URL and timeout settings', async () => {
+  const fake = createController({ delays: { 'Japan 01': 100, 'Japan 02': 50 } });
+  const settings = {
+    ...dueState().settings,
+    switchCooldownMinutes: 0,
+    manualTestUrl: 'https://cp.cloudflare.com/generate_204',
+    manualTimeoutMs: 1500
+  };
+  await withPilot(fake, dueState({ lastSwitch: {}, settings }), async (pilotPort) => {
+    const response = await postJson(pilotPort, '/api/optimize', {
+      group: 'Proxy Select',
+      region: 'jp',
+      switch: false
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.reasonCode, 'switch-disabled');
+    assert.equal(fake.state.delayRequests.length, 2);
+    assert.equal(fake.state.delayRequests.every((request) => request.timeout === '1500'), true);
+    assert.equal(fake.state.delayRequests.every((request) => request.testUrl === 'https://cp.cloudflare.com/generate_204'), true);
   });
 });

@@ -30,6 +30,8 @@ function sanitizeSettings(saved, defaults) {
     switchThresholdMs: clampNumber(source.switchThresholdMs, defaults.switchThresholdMs, 0, 500),
     switchCooldownMinutes: clampNumber(source.switchCooldownMinutes, defaults.switchCooldownMinutes, 0, 1440),
     healthHalfLifeMinutes: clampNumber(source.healthHalfLifeMinutes, defaults.healthHalfLifeMinutes, 1, 10080),
+    manualTestUrl: typeof source.manualTestUrl === 'string' && source.manualTestUrl ? source.manualTestUrl : defaults.manualTestUrl,
+    manualTimeoutMs: clampNumber(source.manualTimeoutMs, defaults.manualTimeoutMs, 1000, 10000),
     samples: clampNumber(source.samples, defaults.samples, 1, 5),
     manualPauseMinutes: clampNumber(source.manualPauseMinutes, defaults.manualPauseMinutes, 1, 1440),
     connectivityCheckMinutes: clampNumber(source.connectivityCheckMinutes, defaults.connectivityCheckMinutes, 1, 30),
