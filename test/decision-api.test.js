@@ -212,9 +212,15 @@ test('automatic optimization rechecks the same region before crossing regions on
     assert.equal(response.body.decision.code, 'target-service-outage');
     assert.equal(response.body.active, 'Japan 01');
     assert.equal(fake.state.delayRequests.some((request) => request.name === 'US 01'), false);
-    assert.deepEqual(fake.state.delayRequests.map((request) => request.name), ['Japan 01', 'Japan 02', 'Japan 01', 'Japan 02']);
-    assert.equal(fake.state.delayRequests.slice(0, 2).every((request) => request.testUrl === 'https://www.gstatic.com/generate_204'), true);
-    assert.equal(fake.state.delayRequests.slice(2).every((request) => request.testUrl === 'https://cp.cloudflare.com/generate_204'), true);
+    const defaultRequests = fake.state.delayRequests.filter((request) => request.testUrl === 'https://www.gstatic.com/generate_204');
+    const verifyRequests = fake.state.delayRequests.filter((request) => request.testUrl === 'https://cp.cloudflare.com/generate_204');
+    assert.deepEqual(defaultRequests.map((request) => request.name).sort(), ['Japan 01', 'Japan 02']);
+    assert.deepEqual(verifyRequests.map((request) => request.name).sort(), ['Japan 01', 'Japan 02']);
+    assert.ok(fake.state.delayRequests.lastIndexOf(defaultRequests.at(-1)) < fake.state.delayRequests.indexOf(verifyRequests[0]));
+    assert.deepEqual(response.body.resultBatches.map((batch) => ({ target: batch.target, candidates: batch.candidates })), [
+      { target: 'https://www.gstatic.com/generate_204', candidates: ['Japan 01', 'Japan 02'] },
+      { target: 'https://cp.cloudflare.com/generate_204', candidates: ['Japan 01', 'Japan 02'] }
+    ]);
   });
 });
 
