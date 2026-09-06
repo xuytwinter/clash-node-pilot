@@ -4,8 +4,9 @@ const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
-const { ControllerClient, parseConfig: parseControllerConfig } = require('./src/core/controller');
+const { ControllerClient, parseConfig: parseControllerConfig, probeConfigBackend, safeBackend } = require('./src/core/controller');
 const { createRegionResolver, loadRegions, summarizeRegions: summarizeRegionCounts } = require('./src/core/regions');
+const { JobCoordinator } = require('./src/core/jobs');
 const optimizerCore = require('./src/core/optimizer');
 
 const HOST = '127.0.0.1';
@@ -31,6 +32,7 @@ const VERIFY_TEST_URL = 'https://cp.cloudflare.com/generate_204';
 const TARGET_GROUP = process.env.CLASH_TARGET_GROUP || '🐟漏网之鱼';
 const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
+const DEFAULT_JOB_BUDGET_MS = 120000;
 const LEGACY_STATE_PATH = path.join(__dirname, 'data', 'state.json');
 function resolvePilotDataDir(env = process.env) {
   return path.join(env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'ClashNodePilot');
@@ -45,7 +47,8 @@ function migrateLegacyState(statePath = resolveStatePath(), legacyPath = LEGACY_
   return true;
 }
 const STATE_PATH = resolveStatePath();
-const runtime = { running: false, startedAt: null, history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
+const runtime = { history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, monitorOnly: false, selectedBackend: null, settings: { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000 } };
+const coordinator = new JobCoordinator();
 
 function loadRuntimeState() {
   try {
@@ -86,15 +89,7 @@ function regionFor(name) {
 }
 
 async function probeBackend(backend) {
-  try {
-    const config = parseConfig(await fs.readFile(backend.configPath, 'utf8'));
-    const controller = /^https?:\/\//i.test(config.controller) ? config.controller : `http://${config.controller}`;
-    const headers = config.secret ? { Authorization: `Bearer ${config.secret}` } : {};
-    const response = await fetch(`${controller}/version`, { headers, signal: AbortSignal.timeout(1800) });
-    if (!response.ok) return { ...backend, online: false };
-    const version = await response.json().catch(() => ({}));
-    return { ...backend, online: true, version: version.version || version.meta || 'unknown', config };
-  } catch { return { ...backend, online: false }; }
+  return probeConfigBackend(backend);
 }
 
 async function discoverBackends() {
@@ -159,19 +154,27 @@ async function activeBackend() {
   return backends.find((item) => item.online && item.id === runtime.selectedBackend) || backends.find((item) => item.online) || null;
 }
 
-async function controllerRequest(route, options = {}) {
-  const backend = await activeBackend();
-  if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
+function controllerRequestForBackend(backend, job = null) {
   const client = new ControllerClient({ controller: backend.config.controller, secret: backend.config.secret });
-  return client.request(route, options);
+  return (route, options = {}) => client.request(route, { ...options, signal: options.signal || job?.signal });
+}
+
+async function controllerRequest(route, options = {}) {
+  const { backend: fixedBackend, ...requestOptions } = options;
+  const backend = fixedBackend || await activeBackend();
+  if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
+  return controllerRequestForBackend(backend)(route, requestOptions);
+}
+
+async function inventoryForBackend(backend, request = controllerRequestForBackend(backend)) {
+  if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
+  const payload = await request('/proxies');
+  const { proxies, groups } = optimizerCore.selectorGroupsFromPayload(payload);
+  return { proxies, groups, backend };
 }
 
 async function inventory() {
-  const backend = await activeBackend();
-  if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
-  const payload = await controllerRequest('/proxies');
-  const { proxies, groups } = optimizerCore.selectorGroupsFromPayload(payload);
-  return { proxies, groups, backend };
+  return inventoryForBackend(await activeBackend());
 }
 
 async function selectedUiGroup(groups) {
@@ -208,12 +211,12 @@ function summarizeRegions(members) {
   return summarizeRegionCounts(members, REGIONS, regionFor);
 }
 
-async function measureNode(name, testUrl, timeout) {
-  return optimizerCore.measureNode(controllerRequest, name, testUrl, timeout);
+async function measureNode(name, testUrl, timeout, request = controllerRequest) {
+  return optimizerCore.measureNode(request, name, testUrl, timeout);
 }
 
-async function measureNodeStable(name, testUrl, timeout, samples = 2) {
-  return optimizerCore.measureNodeStable(controllerRequest, name, testUrl, timeout, samples);
+async function measureNodeStable(name, testUrl, timeout, samples = 2, request = controllerRequest, job = null) {
+  return optimizerCore.measureNodeStable(request, name, testUrl, timeout, samples, { signal: job?.signal });
 }
 
 function addHistory(entry) {
@@ -222,20 +225,290 @@ function addHistory(entry) {
   persistRuntimeState();
 }
 
-function lockRemaining(group) {
-  return Math.max(0, (runtime.locks.get(group) || 0) - Date.now());
+function scopedGroupKey(backend, groupName) {
+  return `${encodeURIComponent(backend?.id || 'default')}|${encodeURIComponent(groupName)}`;
 }
 
-function updateHealth(results) {
-  optimizerCore.updateHealth(runtime.health, results);
+function scopedHealth(backend, groupName) {
+  return { backendId: backend?.id || 'default', group: groupName };
 }
 
-function healthScore(result) {
-  return optimizerCore.healthScore(result, runtime.health);
+function lockRemainingFor(backend, groupName) {
+  const scoped = runtime.locks.get(scopedGroupKey(backend, groupName)) || 0;
+  const legacy = runtime.locks.get(groupName) || 0;
+  return Math.max(0, Math.max(scoped, legacy) - Date.now());
 }
 
-async function mapLimit(items, limit, mapper) {
-  return optimizerCore.mapLimit(items, limit, mapper);
+function lockGroup(backend, groupName, durationMs = runtime.settings.manualPauseMinutes * 60000) {
+  const expiresAt = Date.now() + durationMs;
+  runtime.locks.set(scopedGroupKey(backend, groupName), expiresAt);
+  runtime.locks.delete(groupName);
+  return durationMs;
+}
+
+function clearGroupLock(backend, groupName) {
+  runtime.locks.delete(scopedGroupKey(backend, groupName));
+  runtime.locks.delete(groupName);
+}
+
+function getLastAuto(backend, groupName) {
+  return runtime.lastAuto.get(scopedGroupKey(backend, groupName)) || runtime.lastAuto.get(groupName);
+}
+
+function setLastAuto(backend, groupName, value) {
+  runtime.lastAuto.set(scopedGroupKey(backend, groupName), value);
+  runtime.lastAuto.delete(groupName);
+}
+
+function clearLastAuto(backend, groupName) {
+  runtime.lastAuto.delete(scopedGroupKey(backend, groupName));
+  runtime.lastAuto.delete(groupName);
+}
+
+function boundedNumber(value, fallback, min, max, { integer = true } = {}) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  const clamped = Math.min(max, Math.max(min, number));
+  return integer ? Math.trunc(clamped) : clamped;
+}
+
+function nextAutoRunIso(now = Date.now()) {
+  return new Date(now + runtime.settings.autoIntervalMinutes * 60000).toISOString();
+}
+
+function updateSettings(settings = {}) {
+  const input = settings && typeof settings === 'object' ? settings : {};
+  runtime.settings = {
+    autoIntervalMinutes: Object.hasOwn(input, 'autoIntervalMinutes') ? boundedNumber(input.autoIntervalMinutes, runtime.settings.autoIntervalMinutes, 1, 60) : runtime.settings.autoIntervalMinutes,
+    switchThresholdMs: Object.hasOwn(input, 'switchThresholdMs') ? boundedNumber(input.switchThresholdMs, runtime.settings.switchThresholdMs, 0, 500) : runtime.settings.switchThresholdMs,
+    samples: Object.hasOwn(input, 'samples') ? boundedNumber(input.samples, runtime.settings.samples, 1, 5) : runtime.settings.samples,
+    manualPauseMinutes: Object.hasOwn(input, 'manualPauseMinutes') ? boundedNumber(input.manualPauseMinutes, runtime.settings.manualPauseMinutes, 1, 1440) : runtime.settings.manualPauseMinutes
+  };
+}
+
+function normalizeTestUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return DEFAULT_TEST_URL;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : DEFAULT_TEST_URL;
+  } catch {
+    return DEFAULT_TEST_URL;
+  }
+}
+
+async function readGroupNow(request, groupName) {
+  const payload = await request('/proxies');
+  const active = payload.proxies?.[groupName]?.now;
+  if (typeof active !== 'string') throw Object.assign(new Error('Selector group disappeared during optimization'), { status: 409, code: 'group-stale' });
+  return active;
+}
+
+async function applySelectorDecision({ backend, request, group, target, allowSwitch, jobKind }) {
+  if (!allowSwitch) return { active: group.now, switched: false, reasonCode: 'switch-disabled' };
+  if (runtime.monitorOnly) return { active: group.now, switched: false, reasonCode: 'monitor-only' };
+  if (group.now === target) return { active: group.now, switched: false, reasonCode: 'already-active' };
+
+  const current = await readGroupNow(request, group.name);
+  if (current !== group.now) {
+    const lockMs = lockGroup(backend, group.name);
+    persistRuntimeState();
+    return { active: current, switched: false, reasonCode: 'external-change', lockMs };
+  }
+
+  await request(`/proxies/${encodeURIComponent(group.name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ name: target })
+  });
+  const active = await readGroupNow(request, group.name);
+  const switched = active === target;
+  if (switched && jobKind === 'manual') {
+    lockGroup(backend, group.name);
+    persistRuntimeState();
+  }
+  return { active, switched, reasonCode: switched ? 'switched' : 'write-not-applied' };
+}
+
+function updateHealth(results, scope = {}) {
+  optimizerCore.updateHealth(runtime.health, results, scope);
+}
+
+function healthScore(result, scope = {}) {
+  return optimizerCore.healthScore(result, runtime.health, scope);
+}
+
+async function mapLimit(items, limit, mapper, options = {}) {
+  return optimizerCore.mapLimit(items, limit, mapper, options);
+}
+
+function apiError(message, status = 400, code = 'bad-request') {
+  return Object.assign(new Error(message), { status, code });
+}
+
+function jobBudgetFromBody(body, fallback = DEFAULT_JOB_BUDGET_MS) {
+  return boundedNumber(body?.budgetMs, fallback, 10000, 300000);
+}
+
+async function runManualOptimize(body) {
+  const region = REGIONS.find((item) => item.id === body.region);
+  if (!region) throw apiError('请选择有效地区', 400, 'invalid-region');
+  const timeout = boundedNumber(body.timeout, 5000, 1000, 10000);
+  const testUrl = normalizeTestUrl(body.testUrl);
+  const backend = await activeBackend();
+  if (!backend) throw apiError('No supported Clash/Mihomo controller is online', 503, 'controller-offline');
+
+  return coordinator.run('manual-optimize', { backend, timeoutMs: jobBudgetFromBody(body) }, async (job) => {
+    const request = controllerRequestForBackend(backend, job);
+    const { groups } = await inventoryForBackend(backend, request);
+    const group = groups.find((item) => item.name === body.group);
+    if (!group) throw apiError('代理组不存在或不是手动选择组', 400, 'invalid-group');
+    job.group = group.name;
+    const candidates = group.members.filter((name) => regionFor(name) === region.id);
+    if (!candidates.length) throw apiError(`${region.label}没有可测速节点`, 404, 'no-region-candidates');
+
+    const results = await mapLimit(candidates, 6, (name) => measureNode(name, testUrl, timeout, request), { signal: job.signal });
+    results.sort((a, b) => (a.delay ?? Infinity) - (b.delay ?? Infinity));
+    const best = results.find((item) => item.ok);
+    if (!best) return { status: 502, body: { error: `${region.label}节点全部测速失败`, code: 'all-candidates-failed', results } };
+
+    const decision = await applySelectorDecision({
+      backend,
+      request,
+      group,
+      target: best.name,
+      allowSwitch: body.switch !== false,
+      jobKind: 'manual'
+    });
+    return {
+      status: 200,
+      body: {
+        jobId: job.id,
+        backend: safeBackend(backend),
+        region: region.label,
+        group: group.name,
+        previous: group.now,
+        active: decision.active,
+        best,
+        switched: decision.switched,
+        reasonCode: decision.reasonCode,
+        lockMs: decision.lockMs || lockRemainingFor(backend, group.name),
+        results
+      }
+    };
+  });
+}
+
+async function runAutomaticOptimize(body = {}) {
+  const now = Date.now();
+  const nextRunAt = Date.parse(runtime.nextRunAt || '');
+  if (!body.force && Number.isFinite(nextRunAt) && nextRunAt > now) {
+    return { status: 200, body: { skipped: true, reason: 'Not due yet', code: 'not-due', nextRunAt: runtime.nextRunAt } };
+  }
+  const backend = await activeBackend();
+  if (!backend) throw apiError('No supported Clash/Mihomo controller is online', 503, 'controller-offline');
+
+  return coordinator.run('auto-optimize', { backend, timeoutMs: jobBudgetFromBody(body) }, async (job) => {
+    runtime.nextRunAt = nextAutoRunIso(now);
+    persistRuntimeState();
+
+    const request = controllerRequestForBackend(backend, job);
+    const { groups } = await inventoryForBackend(backend, request);
+    const group = await pickPrimaryGroup(groups, backend);
+    if (!group) return { status: 404, body: { skipped: true, reason: '没有可用的手动代理组', code: 'no-selector-group' } };
+    job.group = group.name;
+
+    const locked = lockRemainingFor(backend, group.name);
+    if (locked > 0) {
+      const body = { skipped: true, reason: '手动保护中', code: 'manual-protection', lockMs: locked, group: group.name };
+      addHistory({ group: group.name, backend: backend.id, skipped: true, reason: body.reason, code: body.code, lockMs: locked });
+      return { status: 200, body };
+    }
+
+    const previousAuto = getLastAuto(backend, group.name);
+    if (previousAuto && previousAuto !== group.now) {
+      const pauseMs = lockGroup(backend, group.name);
+      persistRuntimeState();
+      const body = { skipped: true, reason: '检测到手动切换，已暂停自动切换', code: 'external-change', lockMs: pauseMs, group: group.name, active: group.now };
+      addHistory({ group: group.name, backend: backend.id, skipped: true, reason: '检测到手动切换', code: body.code, lockMs: pauseMs });
+      return { status: 200, body };
+    }
+
+    const currentRegion = regionFor(group.now);
+    if (currentRegion === 'other') return { status: 200, body: { skipped: true, reason: '当前节点地区无法识别', code: 'unknown-current-region', group: group.name, current: group.now } };
+
+    const scope = scopedHealth(backend, group.name);
+    const samples = runtime.settings.samples;
+    const candidates = group.members.filter((name) => regionFor(name) === currentRegion);
+    let results = candidates.length ? await mapLimit(candidates, 6, (name) => measureNodeStable(name, DEFAULT_TEST_URL, 5000, samples, request, job), { signal: job.signal }) : [];
+    updateHealth(results, scope);
+    results.sort((a, b) => (a.ok ? healthScore(a, scope) : Infinity) - (b.ok ? healthScore(b, scope) : Infinity));
+    let best = results.find((item) => item.ok);
+    let fallbackFrom = null;
+
+    if (!best) {
+      fallbackFrom = currentRegion;
+      const alternatives = group.members.filter((name) => {
+        const region = regionFor(name);
+        return region !== 'other' && region !== currentRegion;
+      });
+      const fallbackResults = await mapLimit(alternatives, 6, (name) => measureNodeStable(name, VERIFY_TEST_URL, 5000, samples, request, job), { signal: job.signal });
+      updateHealth(fallbackResults, scope);
+      fallbackResults.sort((a, b) => (a.ok ? healthScore(a, scope) : Infinity) - (b.ok ? healthScore(b, scope) : Infinity));
+      best = fallbackResults.find((item) => item.ok);
+      results = fallbackResults;
+    }
+
+    if (!best) {
+      const body = { skipped: true, reason: '所有可识别地区节点测速全部失败', code: 'all-candidates-failed', group: group.name, region: currentRegion, fallbackFrom, results };
+      addHistory({ group: group.name, backend: backend.id, skipped: true, reason: body.reason, code: body.code, region: currentRegion });
+      return { status: 200, body };
+    }
+
+    const selectedRegion = regionFor(best.name);
+    const currentDelay = results.find((item) => item.name === group.now)?.delay ?? Infinity;
+    const improvement = currentDelay - best.delay;
+    const shouldSwitch = group.now !== best.name && (currentDelay === Infinity || improvement >= runtime.settings.switchThresholdMs);
+    let decision = { active: group.now, switched: false, reasonCode: group.now === best.name ? 'already-active' : 'below-threshold' };
+    if (shouldSwitch) decision = await applySelectorDecision({ backend, request, group, target: best.name, allowSwitch: true, jobKind: 'auto' });
+
+    if (decision.reasonCode === 'external-change') {
+      const body = { skipped: true, reason: '检测到手动切换，已暂停自动切换', code: decision.reasonCode, lockMs: decision.lockMs, group: group.name, active: decision.active, results };
+      addHistory({ group: group.name, backend: backend.id, skipped: true, reason: body.reason, code: body.code, lockMs: decision.lockMs });
+      return { status: 200, body };
+    }
+
+    setLastAuto(backend, group.name, decision.active);
+    runtime.lastResults = {
+      at: new Date().toISOString(),
+      source: 'automatic',
+      backend: backend.id,
+      group: group.name,
+      active: decision.active,
+      region: selectedRegion,
+      reasonCode: decision.reasonCode,
+      results: results.map(({ name, delay, ok, error, successCount, failureCount, jitter }) => ({ name, delay, ok, error, successCount, failureCount, jitter }))
+    };
+    persistRuntimeState();
+
+    const entry = {
+      skipped: false,
+      region: selectedRegion,
+      fallbackFrom,
+      group: group.name,
+      backend: backend.id,
+      previous: group.now,
+      active: decision.active,
+      best,
+      switched: decision.switched,
+      success: results.filter((item) => item.ok).length,
+      candidates: results.length,
+      improvement,
+      score: Math.round(healthScore(best, scope)),
+      reasonCode: decision.reasonCode
+    };
+    addHistory(entry);
+    return { status: 200, body: { jobId: job.id, ...entry, lockMs: lockRemainingFor(backend, group.name), results } };
+  });
 }
 
 async function readJson(req) {
@@ -267,16 +540,17 @@ async function apiHandler(req, res, url) {
     const targetGroup = await pickPrimaryGroup(groups, backend);
     const discovered = await discoverBackends();
     const v2rayN = detectV2rayN();
+    const currentJob = coordinator.snapshot();
     return sendJson(res, 200, {
       connected: true,
       startup: startupStatus(),
-      backend: { id: backend.id, name: backend.name, version: backend.version },
-      backends: discovered.map(({ id, name, online, version }) => ({ id, name, online, version })),
-      detectedClients: [...discovered.map(({ id, name, online, version }) => ({ id, name, online, version, writable: true })), v2rayN],
+      backend: safeBackend(backend),
+      backends: discovered.map((item) => safeBackend(item)),
+      detectedClients: [...discovered.map((item) => ({ ...safeBackend(item), writable: true })), v2rayN],
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
       targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
-      automation: { running: runtime.running, startedAt: runtime.startedAt, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemaining(targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
+      automation: { running: Boolean(currentJob), currentJob, startedAt: currentJob?.startedAt || null, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, lockMs: targetGroup ? lockRemainingFor(backend, targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
   }
@@ -287,114 +561,40 @@ async function apiHandler(req, res, url) {
   }
   if (req.method === 'POST' && url.pathname === '/api/automation') {
     const body = await readJson(req);
+    if (body.action === 'cancel') {
+      return sendJson(res, 200, { cancelled: coordinator.cancel('Cancelled from dashboard') });
+    }
     if (body.action === 'backend') {
       const available = await discoverBackends();
       const selected = available.find((item) => item.id === body.value && item.online);
       if (!selected) return sendJson(res, 400, { error: 'Selected backend is offline or unavailable' });
       runtime.selectedBackend = selected.id;
       persistRuntimeState();
-      return sendJson(res, 200, { backend: { id: selected.id, name: selected.name, version: selected.version } });
+      return sendJson(res, 200, { backend: safeBackend(selected) });
     }
     const { groups, backend } = await inventory();
     const group = await pickPrimaryGroup(groups, backend);
     if (!group) return sendJson(res, 404, { error: 'No active selector group' });
-    if (body.action === 'lock') runtime.locks.set(group.name, Date.now() + runtime.settings.manualPauseMinutes * 60000);
-    if (body.action === 'unlock') { runtime.locks.delete(group.name); runtime.lastAuto.delete(group.name); }
+    if (body.action === 'lock') lockGroup(backend, group.name);
+    if (body.action === 'unlock') { clearGroupLock(backend, group.name); clearLastAuto(backend, group.name); }
     if (body.action === 'monitor') runtime.monitorOnly = Boolean(body.value);
     if (body.action === 'clear-history') runtime.history = [];
-    if (body.action === 'settings') runtime.settings = {
-      autoIntervalMinutes: Math.min(60, Math.max(1, Number(body.settings?.autoIntervalMinutes) || 3)),
-      switchThresholdMs: Math.min(500, Math.max(0, Number(body.settings?.switchThresholdMs) || 25)),
-      samples: Math.min(5, Math.max(1, Number(body.settings?.samples) || 2)),
-      manualPauseMinutes: Math.min(1440, Math.max(1, Number(body.settings?.manualPauseMinutes) || 15))
-    };
-    if (body.action === 'settings') runtime.nextRunAt = new Date(Date.now() + runtime.settings.autoIntervalMinutes * 60000).toISOString();
+    if (body.action === 'settings') {
+      updateSettings(body.settings);
+      runtime.nextRunAt = nextAutoRunIso();
+    }
     persistRuntimeState();
-    return sendJson(res, 200, { lockMs: lockRemaining(group.name), monitorOnly: Boolean(runtime.monitorOnly) });
+    return sendJson(res, 200, { lockMs: lockRemainingFor(backend, group.name), monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings });
   }
   if (req.method === 'POST' && url.pathname === '/api/optimize') {
     const body = await readJson(req);
-    const region = REGIONS.find((item) => item.id === body.region);
-    if (!region) return sendJson(res, 400, { error: '请选择有效地区' });
-    const { groups } = await inventory();
-    const group = groups.find((item) => item.name === body.group);
-    if (!group) return sendJson(res, 400, { error: '代理组不存在或不是手动选择组' });
-    const candidates = group.members.filter((name) => regionFor(name) === region.id);
-    if (!candidates.length) return sendJson(res, 404, { error: `${region.label}没有可测速节点` });
-    const timeout = Math.min(10000, Math.max(1000, Number(body.timeout) || 5000));
-    const testUrl = typeof body.testUrl === 'string' && /^https?:\/\//.test(body.testUrl) ? body.testUrl : DEFAULT_TEST_URL;
-    const results = await mapLimit(candidates, 6, (name) => measureNode(name, testUrl, timeout));
-    results.sort((a, b) => (a.delay ?? Infinity) - (b.delay ?? Infinity));
-    const best = results.find((item) => item.ok);
-    if (!best) return sendJson(res, 502, { error: `${region.label}节点全部测速失败`, results });
-    if (body.switch !== false && group.now !== best.name) {
-      await controllerRequest(`/proxies/${encodeURIComponent(group.name)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ name: best.name })
-      });
-    }
-    const refreshed = await controllerRequest('/proxies');
-    const active = refreshed.proxies?.[group.name]?.now;
-    return sendJson(res, 200, { region: region.label, group: group.name, previous: group.now, active, best, switched: group.now !== active, results });
+    const result = await runManualOptimize(body);
+    return sendJson(res, result.status, result.body);
   }
   if (req.method === 'POST' && url.pathname === '/api/auto-optimize') {
-    if (runtime.running) return sendJson(res, 409, { skipped: true, reason: '已有优选任务正在运行' });
-    const now = Date.now();
-    const nextRunAt = Date.parse(runtime.nextRunAt || '');
-    if (Number.isFinite(nextRunAt) && nextRunAt > now) return sendJson(res, 200, { skipped: true, reason: 'Not due yet', nextRunAt: runtime.nextRunAt });
-    runtime.running = true;
-    runtime.startedAt = new Date().toISOString();
-    runtime.nextRunAt = new Date(now + runtime.settings.autoIntervalMinutes * 60000).toISOString();
-    persistRuntimeState();
-    const { groups, backend } = await inventory();
-    const group = await pickPrimaryGroup(groups, backend);
-    if (!group) { runtime.running = false; return sendJson(res, 404, { skipped: true, reason: '没有可用的手动代理组' }); }
-    const locked = lockRemaining(group.name);
-    if (locked > 0) { runtime.running = false; addHistory({ group: group.name, skipped: true, reason: '手动保护中', lockMs: locked }); return sendJson(res, 200, { skipped: true, reason: '手动保护中', lockMs: locked, group: group.name }); }
-    const previousAuto = runtime.lastAuto.get(group.name);
-    if (previousAuto && previousAuto !== group.now) {
-      const pauseMs = runtime.settings.manualPauseMinutes * 60000;
-      runtime.locks.set(group.name, Date.now() + pauseMs);
-      persistRuntimeState();
-      runtime.running = false;
-      addHistory({ group: group.name, skipped: true, reason: '检测到手动切换', lockMs: pauseMs });
-      return sendJson(res, 200, { skipped: true, reason: '检测到手动切换，已暂停自动切换', lockMs: pauseMs, group: group.name, active: group.now });
-    }
-    const currentRegion = regionFor(group.now);
-    if (currentRegion === 'other') { runtime.running = false; return sendJson(res, 200, { skipped: true, reason: '当前节点地区无法识别', group: group.name, current: group.now }); }
-    const candidates = group.members.filter((name) => regionFor(name) === currentRegion);
-    let results = candidates.length ? await mapLimit(candidates, 6, (name) => measureNodeStable(name, DEFAULT_TEST_URL, 5000, runtime.settings.samples)) : [];
-    updateHealth(results);
-    results.sort((a, b) => (a.ok ? healthScore(a) : Infinity) - (b.ok ? healthScore(b) : Infinity));
-    let best = results.find((item) => item.ok);
-    let fallbackFrom = null;
-    if (!best) {
-      fallbackFrom = currentRegion;
-      const alternatives = group.members.filter((name) => {
-        const region = regionFor(name);
-        return region !== 'other' && region !== currentRegion;
-      });
-      const fallbackResults = await mapLimit(alternatives, 6, (name) => measureNodeStable(name, VERIFY_TEST_URL, 5000, runtime.settings.samples));
-      updateHealth(fallbackResults);
-      fallbackResults.sort((a, b) => (a.ok ? healthScore(a) : Infinity) - (b.ok ? healthScore(b) : Infinity));
-      best = fallbackResults.find((item) => item.ok);
-      results = fallbackResults;
-    }
-    if (!best) { runtime.running = false; addHistory({ group: group.name, skipped: true, reason: '所有可识别地区节点测速全部失败', region: currentRegion }); return sendJson(res, 200, { skipped: true, reason: '所有可识别地区节点测速全部失败', group: group.name, region: currentRegion, fallbackFrom, results }); }
-    const selectedRegion = regionFor(best.name);
-    const currentDelay = results.find((item) => item.name === group.now)?.delay ?? Infinity;
-    const improvement = currentDelay - best.delay;
-    const shouldSwitch = group.now !== best.name && (currentDelay === Infinity || improvement >= runtime.settings.switchThresholdMs);
-    if (shouldSwitch && !runtime.monitorOnly) await controllerRequest(`/proxies/${encodeURIComponent(group.name)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify({ name: best.name }) });
-    const active = shouldSwitch && !runtime.monitorOnly ? best.name : group.now;
-    runtime.lastAuto.set(group.name, active);
-    runtime.running = false;
-    persistRuntimeState();
-    const entry = { skipped: false, region: selectedRegion, fallbackFrom, group: group.name, previous: group.now, active, best, switched: shouldSwitch && !runtime.monitorOnly, success: results.filter((item) => item.ok).length, candidates: results.length, improvement, score: Math.round(healthScore(best)) };
-    runtime.lastResults = { at: new Date().toISOString(), source: 'automatic', backend: backend.id, group: group.name, active, region: selectedRegion, results: results.map(({ name, delay, ok, error }) => ({ name, delay, ok, error })) };
-    addHistory(entry);
-    return sendJson(res, 200, entry);
+    const body = req.headers['content-length'] === '0' ? {} : await readJson(req);
+    const result = await runAutomaticOptimize(body);
+    return sendJson(res, result.status, result.body);
   }
   sendJson(res, 404, { error: 'Not found' });
 }
@@ -415,9 +615,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/api/')) await apiHandler(req, res, url);
     else await staticHandler(res, url);
   } catch (error) {
-    if (req.url?.startsWith('/api/auto-optimize')) runtime.running = false;
     const status = error.code === 'ENOENT' ? 404 : error.name === 'TimeoutError' ? 504 : error.status || 500;
-    sendJson(res, status, { error: status === 500 ? `无法连接 Clash Verge：${error.message}` : error.message });
+    const message = status === 500 ? `无法连接 Clash Verge：${error.message}` : error.message;
+    sendJson(res, status, { error: message, code: error.code || 'internal-error' });
   }
 });
 
@@ -425,9 +625,13 @@ if (require.main === module) {
   server.listen(PORT, HOST, () => {
     console.log(`Clash Node Pilot: http://${HOST}:${PORT}`);
     if (process.env.CLASH_PILOT_DISABLE_AUTO_LOOP !== '1') {
-      const runAutomaticCheck = () => fetch(`http://${HOST}:${PORT}/api/auto-optimize`, { method: 'POST' }).catch(() => {});
+      const runAutomaticCheck = async () => {
+        await fetch(`http://${HOST}:${PORT}/api/auto-optimize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+        const nextRunAt = Date.parse(runtime.nextRunAt || '');
+        const delay = Number.isFinite(nextRunAt) ? Math.min(60000, Math.max(5000, nextRunAt - Date.now())) : 30000;
+        setTimeout(runAutomaticCheck, delay);
+      };
       setTimeout(runAutomaticCheck, 10000);
-      setInterval(runAutomaticCheck, 15000);
     }
   });
 }

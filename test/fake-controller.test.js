@@ -4,9 +4,12 @@ const http = require('node:http');
 
 const { ControllerClient } = require('../src/core/controller');
 const {
+  healthScore,
   measureNode,
   measureNodeStable,
-  selectorGroupsFromPayload
+  scopedNodeKey,
+  selectorGroupsFromPayload,
+  updateHealth
 } = require('../src/core/optimizer');
 
 function createFakeController() {
@@ -87,8 +90,40 @@ test('fake Controller rejects missing secrets without leaking them', async () =>
   const port = await fake.listen();
   try {
     const client = new ControllerClient({ controller: `http://127.0.0.1:${port}`, secret: '' });
-    await assert.rejects(() => client.version(), /Unauthorized/);
+    await assert.rejects(
+      () => client.version(),
+      (error) => {
+        assert.equal(error.message, 'Mihomo Controller returned HTTP 401');
+        assert.equal(error.controllerStatus, 401);
+        assert.equal(error.message.includes('Unauthorized'), false);
+        return true;
+      }
+    );
   } finally {
     await fake.close();
   }
+});
+
+test('controller client rejects invalid JSON and forbids redirect following', async () => {
+  let requestOptions;
+  const client = new ControllerClient({
+    controller: 'http://controller.test',
+    fetchImpl: async (url, options) => {
+      requestOptions = options;
+      return new Response('not-json', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+  });
+  await assert.rejects(() => client.request('/version'), { code: 'invalid-controller-json', status: 502 });
+  assert.equal(requestOptions.redirect, 'error');
+});
+
+test('health tracking records partial sample failures under backend and group scope', () => {
+  const health = {};
+  const scope = { backendId: 'clash-verge', group: 'Proxy' };
+  updateHealth(health, [{ name: 'JP Fast', delay: 42, ok: true, successCount: 1, failureCount: 4, jitter: 7 }], scope);
+  const item = health[scopedNodeKey(scope, 'JP Fast')];
+  assert.equal(item.success, 1);
+  assert.equal(item.failure, 4);
+  assert.equal(item.jitter, 7);
+  assert.ok(healthScore({ name: 'JP Fast', delay: 42, ok: true }, health, scope) > 42);
 });
