@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node server.js",
     "demo": "node scripts/demo.js",
+    "benchmark": "node scripts/benchmark.js",
     "test": "node --test"
   },
   "engines": {
