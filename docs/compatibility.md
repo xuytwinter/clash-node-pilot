@@ -38,6 +38,7 @@ The controller must be reachable from the local machine. Remote controller URLs 
 - Runtime state and logs live under `%LOCALAPPDATA%\ClashNodePilot` by default.
 - `CLASH_PILOT_STATE` has highest priority for custom state-file location.
 - On first v0.1.0 startup, legacy repository-local `data\state.json` is copied once when the new state file does not exist.
+- `npm run smoke:package` extracts the portable zip to a temporary path with spaces and Chinese characters and launches the bundled demo with the bundled runtime.
 
 ## Network Probe Scope
 

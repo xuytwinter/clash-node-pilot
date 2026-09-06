@@ -57,6 +57,7 @@ npm start
 npm run demo
 npm run benchmark
 npm run benchmark -- --json
+npm run smoke:package
 ```
 
 项目运行时不依赖第三方 npm 包。
@@ -106,6 +107,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\uninstall-pilot-autostart.ps1
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\release.ps1
+npm run smoke:package
 ```
 
 输出：

@@ -9,6 +9,7 @@
     "start": "node server.js",
     "demo": "node scripts/demo.js",
     "benchmark": "node scripts/benchmark.js",
+    "smoke:package": "node scripts/smoke-package.js",
     "test": "node --test"
   },
   "engines": {

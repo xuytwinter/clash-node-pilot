@@ -57,6 +57,7 @@ Useful scripts:
 npm run demo
 npm run benchmark
 npm run benchmark -- --json
+npm run smoke:package
 ```
 
 The project has no third-party npm runtime dependencies.
@@ -106,6 +107,7 @@ Logs are written under `%LOCALAPPDATA%\ClashNodePilot` by default. Scripts prefe
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\release.ps1
+npm run smoke:package
 ```
 
 Outputs:
