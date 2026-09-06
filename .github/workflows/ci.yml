@@ -53,6 +53,11 @@ jobs:
               Invoke-NodeCheck $_.FullName
             }
           }
+          if (Test-Path scripts) {
+            Get-ChildItem -Path scripts -Recurse -Filter *.js | ForEach-Object {
+              Invoke-NodeCheck $_.FullName
+            }
+          }
 
   powershell-parse:
     name: PowerShell parse checks
