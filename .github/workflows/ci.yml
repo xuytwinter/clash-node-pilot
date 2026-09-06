@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node-core:
+    name: Node core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+          - ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Run Node tests
+        run: npm test
+
+      - name: Syntax check JavaScript
+        shell: pwsh
+        run: |
+          node --check server.js
+          node --check public/app.js
+          if (Test-Path src) {
+            Get-ChildItem -Path src -Recurse -Filter *.js | ForEach-Object {
+              node --check $_.FullName
+            }
+          }
+
+  powershell-parse:
+    name: PowerShell parse checks
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse-check PowerShell scripts
+        shell: pwsh
+        run: |
+          $scripts = Get-ChildItem -Path . -Filter *.ps1
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) {
+              throw "PowerShell parse failed for $($script.Name): $($errors[0].Message)"
+            }
+          }
