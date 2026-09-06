@@ -4,6 +4,9 @@ const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
+const { ControllerClient, parseConfig: parseControllerConfig } = require('./src/core/controller');
+const { createRegionResolver, loadRegions, summarizeRegions: summarizeRegionCounts } = require('./src/core/regions');
+const optimizerCore = require('./src/core/optimizer');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 3210);
@@ -28,7 +31,6 @@ const VERIFY_TEST_URL = 'https://cp.cloudflare.com/generate_204';
 const TARGET_GROUP = process.env.CLASH_TARGET_GROUP || '🐟漏网之鱼';
 const SWITCH_THRESHOLD_MS = Number(process.env.SWITCH_THRESHOLD_MS || 25);
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
-const GROUP_TYPES = new Set(['Selector', 'URLTest', 'Fallback', 'LoadBalance', 'Relay']);
 const LEGACY_STATE_PATH = path.join(__dirname, 'data', 'state.json');
 function resolvePilotDataDir(env = process.env) {
   return path.join(env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'ClashNodePilot');
@@ -72,31 +74,15 @@ function persistRuntimeState() {
 migrateLegacyState();
 loadRuntimeState();
 
-let REGIONS = [
-  { id: 'jp', label: '日本', flag: '🇯🇵', pattern: /🇯🇵|日本|东京|東京|大阪|名古屋|jp\b|japan|tokyo|osaka/i },
-  { id: 'hk', label: '香港', flag: '🇭🇰', pattern: /🇭🇰|香港|港(?!口)|hk\b|hong\s*kong/i },
-  { id: 'tw', label: '台湾', flag: '🇹🇼', pattern: /🇹🇼|台湾|臺灣|台北|臺北|高雄|tw\b|taiwan|taipei/i },
-  { id: 'sg', label: '新加坡', flag: '🇸🇬', pattern: /🇸🇬|新加坡|狮城|獅城|sg\b|singapore/i },
-  { id: 'us', label: '美国', flag: '🇺🇸', pattern: /🇺🇸|美国|美國|洛杉矶|洛杉磯|圣何塞|聖何塞|西雅图|西雅圖|纽约|紐約|us\b|usa\b|united states|los angeles|seattle|san jose/i },
-  { id: 'kr', label: '韩国', flag: '🇰🇷', pattern: /🇰🇷|韩国|韓國|首尔|首爾|kr\b|korea|seoul/i },
-  { id: 'de', label: '德国', flag: '🇩🇪', pattern: /🇩🇪|德国|德國|法兰克福|法蘭克福|de\b|germany|frankfurt/i },
-  { id: 'uk', label: '英国', flag: '🇬🇧', pattern: /🇬🇧|英国|英國|伦敦|倫敦|uk\b|britain|london/i }
-];
-try {
-  const customRegions = JSON.parse(fsSync.readFileSync(path.join(__dirname, 'regions.json'), 'utf8'));
-  REGIONS = REGIONS.map((region) => ({ ...region, pattern: customRegions[region.id] ? new RegExp(customRegions[region.id].join('|'), 'i') : region.pattern }));
-} catch { /* bundled defaults remain active */ }
+const REGIONS = loadRegions(__dirname);
+const resolveRegion = createRegionResolver(REGIONS);
 
 function parseConfig(text) {
-  const value = (key) => {
-    const match = text.match(new RegExp(`^${key}:\\s*(.*?)\\s*$`, 'm'));
-    return match ? match[1].replace(/^['"]|['"]$/g, '') : '';
-  };
-  return { controller: value('external-controller') || '127.0.0.1:9097', secret: value('secret') };
+  return parseControllerConfig(text);
 }
 
 function regionFor(name) {
-  return REGIONS.find((region) => region.pattern.test(name))?.id || 'other';
+  return resolveRegion(name);
 }
 
 async function probeBackend(backend) {
@@ -176,33 +162,15 @@ async function activeBackend() {
 async function controllerRequest(route, options = {}) {
   const backend = await activeBackend();
   if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
-  const config = backend.config;
-  const controller = /^https?:\/\//i.test(config.controller) ? config.controller : `http://${config.controller}`;
-  const headers = { Accept: 'application/json', ...options.headers };
-  if (config.secret) headers.Authorization = `Bearer ${config.secret}`;
-  const response = await fetch(`${controller}${route}`, { ...options, headers, signal: AbortSignal.timeout(options.timeout || 10000) });
-  const body = response.status === 204 ? null : await response.json().catch(() => null);
-  if (!response.ok) throw Object.assign(new Error(body?.message || `Mihomo returned ${response.status}`), { status: response.status });
-  return body;
+  const client = new ControllerClient({ controller: backend.config.controller, secret: backend.config.secret });
+  return client.request(route, options);
 }
 
 async function inventory() {
   const backend = await activeBackend();
   if (!backend) throw new Error('No supported Clash/Mihomo controller is online');
   const payload = await controllerRequest('/proxies');
-  const entries = Object.entries(payload.proxies || {});
-  const proxies = new Map(entries);
-  const groups = entries
-    .filter(([, proxy]) => proxy.type === 'Selector')
-    .map(([name, proxy]) => ({
-      name,
-      now: proxy.now,
-      members: (proxy.all || []).filter((member) => {
-        const item = proxies.get(member);
-        return item && !GROUP_TYPES.has(item.type) && !['DIRECT', 'REJECT'].includes(member);
-      })
-    }))
-    .filter((group) => group.members.length > 0);
+  const { proxies, groups } = optimizerCore.selectorGroupsFromPayload(payload);
   return { proxies, groups, backend };
 }
 
@@ -237,31 +205,15 @@ async function pickPrimaryGroup(groups, backend) {
 }
 
 function summarizeRegions(members) {
-  const counts = new Map(REGIONS.map((region) => [region.id, 0]));
-  for (const member of members) {
-    const id = regionFor(member);
-    if (counts.has(id)) counts.set(id, counts.get(id) + 1);
-  }
-  return REGIONS.map(({ id, label, flag }) => ({ id, label, flag, count: counts.get(id) })).filter((item) => item.count > 0);
+  return summarizeRegionCounts(members, REGIONS, regionFor);
 }
 
 async function measureNode(name, testUrl, timeout) {
-  const route = `/proxies/${encodeURIComponent(name)}/delay?timeout=${timeout}&url=${encodeURIComponent(testUrl)}`;
-  const started = Date.now();
-  try {
-    const result = await controllerRequest(route, { timeout: timeout + 1500 });
-    return { name, delay: Number(result.delay), ok: Number(result.delay) > 0 };
-  } catch (error) {
-    return { name, delay: null, ok: false, error: error.message, elapsed: Date.now() - started };
-  }
+  return optimizerCore.measureNode(controllerRequest, name, testUrl, timeout);
 }
 
 async function measureNodeStable(name, testUrl, timeout, samples = 2) {
-  const attempts = [];
-  for (let index = 0; index < samples; index++) attempts.push(await measureNode(name, testUrl, timeout));
-  const delays = attempts.filter((item) => item.ok).map((item) => item.delay).sort((a, b) => a - b);
-  if (!delays.length) return { name, delay: null, ok: false, error: attempts.at(-1)?.error || 'All samples failed', samples: attempts };
-  return { name, delay: delays[Math.floor(delays.length / 2)], ok: true, samples: attempts };
+  return optimizerCore.measureNodeStable(controllerRequest, name, testUrl, timeout, samples);
 }
 
 function addHistory(entry) {
@@ -275,36 +227,15 @@ function lockRemaining(group) {
 }
 
 function updateHealth(results) {
-  for (const result of results) {
-    const health = runtime.health[result.name] || { success: 0, failure: 0, latencies: [] };
-    if (result.ok) {
-      health.success++;
-      health.latencies.unshift(result.delay);
-      health.latencies = health.latencies.slice(0, 20);
-    } else health.failure++;
-    health.updatedAt = new Date().toISOString();
-    runtime.health[result.name] = health;
-  }
+  optimizerCore.updateHealth(runtime.health, results);
 }
 
 function healthScore(result) {
-  const health = runtime.health[result.name] || { success: 0, failure: 0 };
-  const total = health.success + health.failure;
-  const failureRate = total ? health.failure / total : 0;
-  return result.delay + failureRate * 200;
+  return optimizerCore.healthScore(result, runtime.health);
 }
 
 async function mapLimit(items, limit, mapper) {
-  const results = new Array(items.length);
-  let cursor = 0;
-  async function worker() {
-    while (cursor < items.length) {
-      const index = cursor++;
-      results[index] = await mapper(items[index], index);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
+  return optimizerCore.mapLimit(items, limit, mapper);
 }
 
 async function readJson(req) {
