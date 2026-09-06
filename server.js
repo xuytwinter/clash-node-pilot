@@ -56,12 +56,39 @@ function migrateLegacyState(statePath = resolveStatePath(), legacyPath = LEGACY_
 }
 const STATE_PATH = resolveStatePath();
 const DEFAULT_SETTINGS = { autoIntervalMinutes: 3, switchThresholdMs: SWITCH_THRESHOLD_MS, samples: 2, manualPauseMinutes: MANUAL_PAUSE_MS / 60000, connectivityCheckMinutes: 1, connectivityTimeoutMs: 5000 };
-const runtime = { history: [], health: {}, lastResults: null, locks: new Map(), lastAuto: new Map(), nextRunAt: null, nextConnectivityCheckAt: null, monitorOnly: false, selectedBackend: null, settings: { ...DEFAULT_SETTINGS }, diagnostics: [] };
+const runtime = {
+  history: [],
+  health: {},
+  lastResults: null,
+  locks: new Map(),
+  lastAuto: new Map(),
+  nextRunAt: null,
+  nextConnectivityCheckAt: null,
+  monitorOnly: false,
+  selectedBackend: null,
+  settings: { ...DEFAULT_SETTINGS },
+  diagnostics: [],
+  persistence: { writable: true, code: 'ok', message: 'Runtime state is writable', restoredFromBackup: false }
+};
 const coordinator = new JobCoordinator();
 
 function addDiagnostic(code, message) {
   runtime.diagnostics.unshift({ at: new Date().toISOString(), code, message });
   runtime.diagnostics = runtime.diagnostics.slice(0, 50);
+}
+
+function stateError(message, status, code) {
+  return Object.assign(new Error(message), { status, code });
+}
+
+function setPersistenceStatus(status) {
+  runtime.persistence = { ...runtime.persistence, ...status };
+}
+
+function ensureStateWritable() {
+  if (!runtime.persistence.writable) {
+    throw stateError(runtime.persistence.message || 'Runtime state is read-only', 409, runtime.persistence.code || 'state-read-only');
+  }
 }
 
 function applyRuntimeSnapshot(saved) {
@@ -99,28 +126,51 @@ function loadRuntimeState() {
   try {
     const { saved, upgraded } = readRuntimeSnapshot(STATE_PATH);
     applyRuntimeSnapshot(saved);
+    setPersistenceStatus({ writable: true, code: 'ok', message: 'Runtime state is writable', restoredFromBackup: false });
     if (upgraded) addDiagnostic('state-upgraded', 'Runtime state was upgraded to the current schema');
   } catch (error) {
     if (error.code === 'ENOENT') return;
     let preserved = null;
+    let preserveError = null;
     try {
       preserved = preserveUnreadableState(error);
-    } catch { /* best-effort corrupt state preservation */ }
+    } catch (copyError) {
+      preserveError = copyError;
+    }
     try {
       const { saved } = readRuntimeSnapshot(`${STATE_PATH}.bak`);
       applyRuntimeSnapshot(saved);
+      setPersistenceStatus({
+        writable: error.code !== 'state-future-schema',
+        code: error.code === 'state-future-schema' ? 'state-future-schema' : 'state-restored-from-backup',
+        message: error.code === 'state-future-schema'
+          ? 'Runtime state was written by a newer version; writes are disabled to avoid overwriting it'
+          : 'Runtime state was restored from backup and can be saved',
+        restoredFromBackup: true
+      });
       addDiagnostic('state-restored-from-backup', 'Runtime state was restored from the last backup');
       addDiagnostic(error.code || 'state-load-failed', preserved ? `Current runtime state was preserved at ${path.basename(preserved)}` : 'Current runtime state could not be loaded');
     } catch {
+      setPersistenceStatus({
+        writable: Boolean(preserved) && error.code !== 'state-future-schema',
+        code: error.code === 'state-future-schema' ? 'state-future-schema' : (preserved ? 'state-reset-after-invalid' : 'state-load-failed'),
+        message: error.code === 'state-future-schema'
+          ? 'Runtime state was written by a newer version; writes are disabled to avoid overwriting it'
+          : (preserved ? 'Runtime state could not be loaded and was preserved before using defaults' : 'Runtime state could not be loaded and writes are disabled'),
+        restoredFromBackup: false
+      });
       addDiagnostic(error.code || 'state-load-failed', preserved ? `Runtime state could not be loaded; preserved at ${path.basename(preserved)}` : 'Runtime state could not be loaded and was ignored');
     }
+    if (preserveError) addDiagnostic('state-preserve-failed', 'Unreadable runtime state could not be copied aside');
   }
 }
 
 function persistRuntimeState() {
+  ensureStateWritable();
+  let temporary = null;
   try {
     fsSync.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
-    const temporary = `${STATE_PATH}.tmp`;
+    temporary = `${STATE_PATH}.tmp`;
     const snapshot = {
       schemaVersion: STATE_SCHEMA_VERSION,
       history: runtime.history,
@@ -136,17 +186,20 @@ function persistRuntimeState() {
       diagnostics: runtime.diagnostics
     };
     fsSync.writeFileSync(temporary, JSON.stringify(snapshot, null, 2), 'utf8');
-    if (fsSync.existsSync(STATE_PATH)) fsSync.copyFileSync(STATE_PATH, `${STATE_PATH}.bak`);
+    if (fsSync.existsSync(STATE_PATH) && !runtime.persistence.restoredFromBackup) fsSync.copyFileSync(STATE_PATH, `${STATE_PATH}.bak`);
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         fsSync.renameSync(temporary, STATE_PATH);
+        setPersistenceStatus({ writable: true, code: 'ok', message: 'Runtime state is writable', restoredFromBackup: false });
         return;
       } catch (error) {
         if (attempt === 2) throw error;
       }
     }
-  } catch {
+  } catch (error) {
+    if (temporary) fsSync.rmSync(temporary, { force: true });
     addDiagnostic('state-save-failed', 'Runtime state could not be saved');
+    throw stateError('Runtime state could not be saved', 507, 'state-save-failed');
   }
 }
 
@@ -825,6 +878,7 @@ async function apiHandler(req, res, url) {
       targetGroup: targetGroup?.name,
       targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
       automation: { running: Boolean(currentJob), currentJob, startedAt: currentJob?.startedAt || null, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, nextConnectivityCheckAt: runtime.nextConnectivityCheckAt, lockMs: targetGroup ? lockRemainingFor(backend, targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
+      persistence: runtime.persistence,
       diagnostics: runtime.diagnostics,
       defaults: { testUrl: DEFAULT_TEST_URL, timeout: 5000 }
     });
@@ -842,6 +896,7 @@ async function apiHandler(req, res, url) {
     if (body.action === 'cancel') {
       return sendJson(res, 200, { cancelled: coordinator.cancel('Cancelled from dashboard') });
     }
+    ensureStateWritable();
     if (body.action === 'backend') {
       if (typeof body.value !== 'string') throw apiError('backend value must be a string', 400, 'invalid-backend');
       const available = await discoverBackends();
@@ -871,12 +926,14 @@ async function apiHandler(req, res, url) {
   }
   if (req.method === 'POST' && url.pathname === '/api/optimize') {
     const body = await readJson(req);
+    if (body.switch !== false) ensureStateWritable();
     const result = await runManualOptimize(body);
     return sendJson(res, result.status, result.body);
   }
   if (req.method === 'POST' && url.pathname === '/api/connectivity-heal') {
     const body = await readJson(req);
     if (Object.hasOwn(body, 'switch') && typeof body.switch !== 'boolean') throw apiError('switch must be a boolean', 400, 'invalid-switch');
+    ensureStateWritable();
     const result = await runConnectivityHeal(body);
     recordConnectivityResult(result.body);
     persistRuntimeState();
@@ -885,6 +942,7 @@ async function apiHandler(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/auto-optimize') {
     const body = req.headers['content-length'] === '0' ? {} : await readJson(req);
     if (Object.hasOwn(body, 'force') && typeof body.force !== 'boolean') throw apiError('force must be a boolean', 400, 'invalid-force');
+    ensureStateWritable();
     const result = await runScheduledOptimize(body);
     return sendJson(res, result.status, result.body);
   }

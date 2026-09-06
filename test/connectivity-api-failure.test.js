@@ -83,6 +83,8 @@ test('connectivity heal treats common probe failure as indeterminate and keeps b
   process.env.CLASH_CONFIG = configPath;
   process.env.CLASH_PILOT_STATE = path.join(sandbox, 'state.json');
   process.env.CLASH_PILOT_DISABLE_AUTO_LOOP = '1';
+  process.env.CLASH_PILOT_DEMO = '1';
+  process.env.CLASH_PILOT_DISABLE_OS_INTEGRATION = '1';
   process.env.CLASH_TARGET_GROUP = 'AI Sites';
   process.env.PORT = '0';
 
