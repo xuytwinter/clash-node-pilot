@@ -5,8 +5,9 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 
-function createController({ active = 'Japan 01', delays = {}, applyPut = true } = {}) {
-  const state = { active, puts: [], delayRequests: [] };
+function createController({ active = 'Japan 01', delays = {}, applyPut = true, failReadbackAfterPut = false } = {}) {
+  const state = { active, puts: [], delayRequests: [], failProxies: false };
+  const resolveDelay = typeof delays === 'function' ? delays : (name) => delays[name];
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (req.method === 'GET' && url.pathname === '/version') {
@@ -15,6 +16,11 @@ function createController({ active = 'Japan 01', delays = {}, applyPut = true } 
       return;
     }
     if (req.method === 'GET' && url.pathname === '/proxies') {
+      if (state.failProxies) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: 'controller unavailable' }));
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         proxies: {
@@ -28,8 +34,9 @@ function createController({ active = 'Japan 01', delays = {}, applyPut = true } 
     }
     if (req.method === 'GET' && url.pathname.startsWith('/proxies/') && url.pathname.endsWith('/delay')) {
       const name = decodeURIComponent(url.pathname.split('/')[2]);
-      state.delayRequests.push({ name, timeout: url.searchParams.get('timeout'), testUrl: url.searchParams.get('url') });
-      const delay = delays[name];
+      const testUrl = url.searchParams.get('url');
+      state.delayRequests.push({ name, timeout: url.searchParams.get('timeout'), testUrl });
+      const delay = resolveDelay(name, testUrl);
       res.writeHead(delay ? 200 : 504, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(delay ? { delay } : { message: 'timeout' }));
       return;
@@ -40,6 +47,7 @@ function createController({ active = 'Japan 01', delays = {}, applyPut = true } 
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
       state.puts.push(body.name);
       if (applyPut) state.active = body.name;
+      if (failReadbackAfterPut) state.failProxies = true;
       res.writeHead(204);
       res.end();
       return;
@@ -75,7 +83,7 @@ function postJson(port, pathName, body = {}) {
   });
 }
 
-async function withPilot(fake, stateSnapshot, run) {
+async function startPilot(fake, stateSnapshot) {
   const fakePort = await fake.listen();
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'clash-node-pilot-decision-api-'));
   const configPath = path.join(sandbox, 'config.yaml');
@@ -98,11 +106,39 @@ async function withPilot(fake, stateSnapshot, run) {
   delete require.cache[require.resolve('../server')];
   const { server } = require('../server');
   const pilotPort = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
-  try {
-    await run(pilotPort, statePath);
-  } finally {
+  let serverClosed = false;
+  const closeServer = async () => {
+    if (serverClosed) return;
+    serverClosed = true;
     await new Promise((resolve) => server.close(resolve));
-    await fake.close();
+  };
+  return {
+    pilotPort,
+    statePath,
+    closeServer,
+    close: async () => {
+      await closeServer();
+      await fake.close();
+    }
+  };
+}
+
+async function openPilotFromEnv() {
+  delete require.cache[require.resolve('../server')];
+  const { server } = require('../server');
+  const pilotPort = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
+  return {
+    pilotPort,
+    close: () => new Promise((resolve) => server.close(resolve))
+  };
+}
+
+async function withPilot(fake, stateSnapshot, run) {
+  const context = await startPilot(fake, stateSnapshot);
+  try {
+    await run(context.pilotPort, context.statePath);
+  } finally {
+    await context.close();
   }
 }
 
@@ -157,6 +193,31 @@ test('automatic optimization bypasses cooldown when the current region hard-fail
   });
 });
 
+test('automatic optimization rechecks the same region before crossing regions on target outage', async () => {
+  const fake = createController({
+    delays: (name, testUrl) => {
+      if (testUrl === 'https://www.gstatic.com/generate_204' && (name === 'Japan 01' || name === 'Japan 02')) return undefined;
+      if (testUrl === 'https://cp.cloudflare.com/generate_204' && name === 'Japan 01') return 95;
+      if (testUrl === 'https://cp.cloudflare.com/generate_204' && name === 'Japan 02') return 55;
+      if (testUrl === 'https://www.gstatic.com/generate_204' && name === 'US 01') return 120;
+      if (testUrl === 'https://cp.cloudflare.com/generate_204' && name === 'US 01') return 130;
+      return undefined;
+    }
+  });
+  await withPilot(fake, dueState({ settings: { ...dueState().settings, switchCooldownMinutes: 0 } }), async (pilotPort) => {
+    const response = await postJson(pilotPort, '/api/auto-optimize', {});
+    assert.equal(response.status, 200);
+    assert.equal(response.body.switched, false);
+    assert.equal(response.body.reasonCode, 'target-service-outage');
+    assert.equal(response.body.decision.code, 'target-service-outage');
+    assert.equal(response.body.active, 'Japan 01');
+    assert.equal(fake.state.delayRequests.some((request) => request.name === 'US 01'), false);
+    assert.deepEqual(fake.state.delayRequests.map((request) => request.name), ['Japan 01', 'Japan 02', 'Japan 01', 'Japan 02']);
+    assert.equal(fake.state.delayRequests.slice(0, 2).every((request) => request.testUrl === 'https://www.gstatic.com/generate_204'), true);
+    assert.equal(fake.state.delayRequests.slice(2).every((request) => request.testUrl === 'https://cp.cloudflare.com/generate_204'), true);
+  });
+});
+
 test('selector write must be confirmed by readback before reporting switched', async () => {
   const fake = createController({ delays: { 'Japan 01': 100, 'Japan 02': 50 }, applyPut: false });
   await withPilot(fake, dueState({ lastSwitch: {}, settings: { ...dueState().settings, switchCooldownMinutes: 0 } }), async (pilotPort) => {
@@ -174,6 +235,74 @@ test('selector write must be confirmed by readback before reporting switched', a
     assert.equal(response.body.commit.verified, false);
     assert.deepEqual(fake.state.puts, ['Japan 02']);
   });
+});
+
+test('selector write reports unknown result when readback fails after commit starts', async () => {
+  const fake = createController({ delays: { 'Japan 01': 100, 'Japan 02': 50 }, failReadbackAfterPut: true });
+  await withPilot(fake, dueState({ lastSwitch: {}, settings: { ...dueState().settings, switchCooldownMinutes: 0 } }), async (pilotPort) => {
+    const response = await postJson(pilotPort, '/api/optimize', {
+      group: 'Proxy Select',
+      region: 'jp',
+      switch: true,
+      testUrl: 'https://www.gstatic.com/generate_204',
+      timeout: 1000
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.switched, false);
+    assert.equal(response.body.reasonCode, 'write-result-unknown');
+    assert.equal(response.body.decision.code, 'write-result-unknown');
+    assert.equal(response.body.commit.writeResult, 'unknown');
+    assert.equal(response.body.commit.verified, false);
+    assert.deepEqual(fake.state.puts, ['Japan 02']);
+  });
+});
+
+test('manual switch persists cooldown across a pilot restart', async () => {
+  let phase = 'manual';
+  const fake = createController({
+    delays: (name) => {
+      if (phase === 'manual') {
+        if (name === 'Japan 01') return 100;
+        if (name === 'Japan 02') return 50;
+      } else {
+        if (name === 'Japan 01') return 40;
+        if (name === 'Japan 02') return 100;
+      }
+      return undefined;
+    }
+  });
+  const settings = { ...dueState().settings, switchCooldownMinutes: 5 };
+  const context = await startPilot(fake, dueState({ lastSwitch: {}, settings }));
+  try {
+    const manual = await postJson(context.pilotPort, '/api/optimize', {
+      group: 'Proxy Select',
+      region: 'jp',
+      switch: true,
+      testUrl: 'https://www.gstatic.com/generate_204',
+      timeout: 1000
+    });
+    assert.equal(manual.status, 200);
+    assert.equal(manual.body.switched, true);
+    const saved = JSON.parse(fs.readFileSync(context.statePath, 'utf8'));
+    assert.ok(saved.lastSwitch['demo|Proxy%20Select'] > 0);
+
+    phase = 'restart';
+    await context.closeServer();
+    const restarted = await openPilotFromEnv();
+    try {
+      const unlock = await postJson(restarted.pilotPort, '/api/automation', { action: 'unlock' });
+      assert.equal(unlock.status, 200);
+      const auto = await postJson(restarted.pilotPort, '/api/auto-optimize', {});
+      assert.equal(auto.status, 200);
+      assert.equal(auto.body.switched, false);
+      assert.equal(auto.body.reasonCode, 'cooldown-active');
+      assert.equal(auto.body.decision.protection.remainingCooldownMs > 0, true);
+    } finally {
+      await restarted.close();
+    }
+  } finally {
+    await context.close();
+  }
 });
 
 test('manual optimization uses persisted probe URL and timeout settings', async () => {

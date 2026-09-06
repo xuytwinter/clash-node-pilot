@@ -419,7 +419,8 @@ function clearLastAuto(backend, groupName) {
 }
 
 function getLastSwitch(backend, groupName) {
-  return runtime.lastSwitch.get(scopedGroupKey(backend, groupName)) || runtime.lastSwitch.get(groupName);
+  const scoped = scopedGroupKey(backend, groupName);
+  return runtime.lastSwitch.has(scoped) ? runtime.lastSwitch.get(scoped) : runtime.lastSwitch.get(groupName);
 }
 
 function setLastSwitch(backend, groupName, value = Date.now()) {
@@ -463,42 +464,64 @@ async function readGroupNow(request, groupName) {
 }
 
 async function applySelectorDecision({ backend, request, group, target, allowSwitch, jobKind, job = null }) {
-  if (!allowSwitch) return { active: group.now, switched: false, reasonCode: 'switch-disabled' };
-  if (runtime.monitorOnly) return { active: group.now, switched: false, reasonCode: 'monitor-only' };
-  if (group.now === target) return { active: group.now, switched: false, reasonCode: 'already-active' };
+  if (!allowSwitch) return { active: group.now, switched: false, reasonCode: 'switch-disabled', commit: selectorCommitState({ reasonCode: 'switch-disabled', active: group.now, target }) };
+  if (runtime.monitorOnly) return { active: group.now, switched: false, reasonCode: 'monitor-only', commit: selectorCommitState({ reasonCode: 'monitor-only', active: group.now, target }) };
+  if (group.now === target) return { active: group.now, switched: false, reasonCode: 'already-active', commit: selectorCommitState({ reasonCode: 'already-active', active: group.now, target }) };
 
   const current = await readGroupNow(request, group.name);
   if (current !== group.now) {
     const lockMs = lockGroup(backend, group.name);
     persistRuntimeState();
-    return { active: current, switched: false, reasonCode: 'external-change', lockMs };
+    return { active: current, switched: false, reasonCode: 'external-change', lockMs, commit: selectorCommitState({ reasonCode: 'external-change', active: current, target }) };
   }
 
   optimizerCore.throwIfAborted(job?.signal);
   job?.beginCommit?.();
   const commitRequest = (route, options = {}) => request(route, { ...options, signal: null });
-  await commitRequest(`/proxies/${encodeURIComponent(group.name)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
-    body: JSON.stringify({ name: target })
-  });
-  const active = await readGroupNow(commitRequest, group.name);
+  let active;
+  try {
+    await commitRequest(`/proxies/${encodeURIComponent(group.name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ name: target })
+    });
+    active = await readGroupNow(commitRequest, group.name);
+  } catch (error) {
+    return {
+      active: group.now,
+      switched: false,
+      reasonCode: 'write-result-unknown',
+      commit: selectorCommitState({
+        started: true,
+        writeResult: 'unknown',
+        verified: false,
+        reasonCode: 'write-result-unknown',
+        active: null,
+        target,
+        job,
+        error
+      })
+    };
+  }
   const switched = active === target;
+  if (switched) setLastSwitch(backend, group.name);
   if (switched && jobKind === 'manual') {
     lockGroup(backend, group.name);
     persistRuntimeState();
   }
-  if (switched) setLastSwitch(backend, group.name);
   return {
     active,
     switched,
     reasonCode: switched ? 'switched' : 'write-not-applied',
-    commit: {
+    commit: selectorCommitState({
       started: true,
+      writeResult: switched ? 'verified' : 'not-applied',
       verified: switched,
-      cancelPolicy: 'finish-after-commit-started',
-      cancelledAfterCommit: Boolean(job?.signal?.aborted)
-    }
+      reasonCode: switched ? 'switched' : 'write-not-applied',
+      active,
+      target,
+      job
+    })
   };
 }
 
@@ -512,10 +535,22 @@ function healthScore(result, scope = {}) {
   return decisionCore.scoreNode(result, runtime.health[optimizerCore.scopedNodeKey(scope, result.name)] || runtime.health[result.name], optimizerCore.scopedNodeKey(scope, result.name), runtime.settings).score;
 }
 
-function healthByName(results, scope = {}) {
+function healthSnapshot() {
+  return Object.fromEntries(Object.entries(runtime.health).map(([key, value]) => [
+    key,
+    { ...value, latencies: Array.isArray(value.latencies) ? [...value.latencies] : [] }
+  ]));
+}
+
+function healthScoreFrom(result, scope = {}, health = runtime.health) {
+  const key = optimizerCore.scopedNodeKey(scope, result.name);
+  return decisionCore.scoreNode(result, health[key] || health[result.name], key, runtime.settings).score;
+}
+
+function healthByName(results, scope = {}, health = runtime.health) {
   const entries = {};
   for (const result of results) {
-    entries[result.name] = runtime.health[optimizerCore.scopedNodeKey(scope, result.name)] || runtime.health[result.name];
+    entries[result.name] = health[optimizerCore.scopedNodeKey(scope, result.name)] || health[result.name];
   }
   return entries;
 }
@@ -534,6 +569,20 @@ function scoredResult(score) {
 
 function scoredResultsFromDecision(decisionEvent) {
   return (decisionEvent.evidence?.ranked || []).map(scoredResult).filter(Boolean);
+}
+
+function selectorCommitState({ started = false, writeResult = 'not-started', verified = false, reasonCode = null, active = null, target = null, job = null, error = null } = {}) {
+  return {
+    started: Boolean(started),
+    writeResult,
+    verified: Boolean(verified),
+    reasonCode,
+    active,
+    target,
+    cancelPolicy: started ? 'finish-after-commit-started' : 'cancel-before-commit',
+    cancelledAfterCommit: Boolean(started && job?.signal?.aborted),
+    ...(error ? { error: { code: error.code || error.name || 'commit-error', message: error.message || 'Selector write result is unknown' } } : {})
+  };
 }
 
 function compactEvidence(result) {
@@ -557,7 +606,7 @@ function compactEvidence(result) {
 }
 
 function selectorDecisionEvent({ code, reason, currentName, active, best, current, results = [], allowSwitch = true, commit = null }) {
-  const action = code === 'target-service-outage' || code === 'common-probe-failure' || code === 'all-candidates-failed' || code === 'no-healthy-candidate'
+  const action = code === 'target-service-outage' || code === 'common-probe-failure' || code === 'all-candidates-failed' || code === 'no-healthy-candidate' || code === 'write-result-unknown'
     ? 'uncertain'
     : (code === 'switched' ? 'switch' : 'hold');
   return {
@@ -582,7 +631,18 @@ function selectorDecisionEvent({ code, reason, currentName, active, best, curren
       best: compactEvidence(best),
       ranked: results.map(compactEvidence).filter(Boolean)
     },
-    commit
+    commit: commit || selectorCommitState({ reasonCode: code, active: currentName || current?.name || active || null, target: best?.name || active || null })
+  };
+}
+
+function finalizedDecisionEvent(policyEvent, decision) {
+  const uncertain = decision.reasonCode === 'write-result-unknown';
+  return {
+    ...policyEvent,
+    code: decision.reasonCode,
+    reason: decision.reasonCode,
+    action: decision.switched ? 'switch' : (uncertain ? 'uncertain' : 'hold'),
+    commit: decision.commit || selectorCommitState({ reasonCode: decision.reasonCode, active: decision.active || policyEvent.current, target: policyEvent.target })
   };
 }
 
@@ -605,6 +665,10 @@ async function measureTargets(name, targets, timeout, request, job = null) {
     successCount: okChecks.length,
     failureCount: checks.length - okChecks.length
   };
+}
+
+function addMeasured(results, batch) {
+  results.push(...batch);
 }
 
 function realMembers(proxies, groupName) {
@@ -663,9 +727,12 @@ async function runConnectivityHeal(body = {}) {
       }
 
       const scope = scopedHealth(backend, controlGroup);
+      const healthView = healthSnapshot();
+      const measuredForHealth = [];
       const current = await measureTargets(resolved.leaf, targets, timeout, request, job);
-      updateHealth([current], scope);
+      measuredForHealth.push(current);
       if (current.ok) {
+        updateHealth(measuredForHealth, scope);
         setLastAuto(backend, controlGroup, resolved.leaf);
         const reason = '当前 Google/OpenAI 探测链路健康';
         attempts.push({ group: groupName, controlGroup, skipped: true, reason, code: 'current-healthy', resolved, current, decision: selectorDecisionEvent({ code: 'current-healthy', reason, active: resolved.leaf, current, results: [current], allowSwitch: body.switch !== false }) });
@@ -687,8 +754,8 @@ async function runConnectivityHeal(body = {}) {
       let fallbackFrom = null;
       for (const batch of batches) {
         const batchResults = await mapLimit(batch.candidates, 4, (name) => measureTargets(name, targets, timeout, request, job), { signal: job.signal });
-        updateHealth(batchResults, scope);
-        batchResults.sort((a, b) => (a.ok ? healthScore(a, scope) : Infinity) - (b.ok ? healthScore(b, scope) : Infinity));
+        measuredForHealth.push(...batchResults);
+        batchResults.sort((a, b) => (a.ok ? healthScoreFrom(a, scope, healthView) : Infinity) - (b.ok ? healthScoreFrom(b, scope, healthView) : Infinity));
         resultBatches.push({ fallbackFrom: batch.fallbackFrom, candidates: [...batch.candidates], results: batchResults });
         results = batchResults;
         best = batchResults.find((item) => item.ok);
@@ -705,6 +772,7 @@ async function runConnectivityHeal(body = {}) {
           'common-probe-failure': '所有探测目标在所有候选节点上均失败，无法判断是目标故障还是本地网络不可用',
           'all-candidates-failed': '候选节点无法同时通过 Google/OpenAI 保通检查'
         }[diagnosis.code] || '候选节点无法同时通过 Google/OpenAI 保通检查';
+        updateHealth(measuredForHealth, scope);
         const attempt = { group: groupName, controlGroup, skipped: true, reason, code: diagnosis.code, diagnosis: diagnosis.confidence, resolved, current, fallbackFrom, results: evidenceResults, resultBatches, targetSummary: diagnosis.targetSummary, decision: selectorDecisionEvent({ code: diagnosis.code, reason, active: resolved.leaf, current, results: evidenceResults, allowSwitch: body.switch !== false }) };
         attempts.push(attempt);
         if (diagnosis.code === 'target-service-outage' || diagnosis.code === 'common-probe-failure') return { status: 200, body: { jobId: job.id, source: 'connectivity-heal', backend: backend.id, ...attempt, attempts } };
@@ -716,12 +784,13 @@ async function runConnectivityHeal(body = {}) {
         backend,
         request,
         group: { name: controlGroup, now: resolved.leaf },
-      target: best.name,
-      allowSwitch: body.switch !== false,
-      jobKind: 'heal',
-      job
+        target: best.name,
+        allowSwitch: body.switch !== false,
+        jobKind: 'heal',
+        job
       });
       setLastAuto(backend, controlGroup, decision.active);
+      updateHealth(measuredForHealth, scope);
       const reason = 'Google/OpenAI 探测链路失败，已选择健康备用节点';
       const entry = { group: groupName, controlGroup, skipped: false, reason, code: decision.reasonCode, resolved, previous: resolved.leaf, active: decision.active, current, best, switched: decision.switched, fallbackFrom, results: orderedResults, resultBatches, commit: decision.commit, decision: selectorDecisionEvent({ code: decision.reasonCode, reason, currentName: resolved.leaf, active: decision.active, best, current, results: orderedResults, allowSwitch: body.switch !== false, commit: decision.commit }) };
       return { status: 200, body: { jobId: job.id, source: 'connectivity-heal', backend: backend.id, ...entry, attempts: [...attempts, entry] } };
@@ -777,7 +846,11 @@ async function runManualOptimize(body) {
     const results = await mapLimit(candidates, 6, (name) => measureNode(name, testUrl, timeout, request), { signal: job.signal });
     results.sort((a, b) => (a.delay ?? Infinity) - (b.delay ?? Infinity));
     const best = results.find((item) => item.ok);
-    if (!best) return { status: 502, body: { error: `${region.label}节点全部测速失败`, code: 'all-candidates-failed', results } };
+    if (!best) {
+      const commit = selectorCommitState({ reasonCode: 'all-candidates-failed', active: group.now });
+      const decision = selectorDecisionEvent({ code: 'all-candidates-failed', reason: 'all-candidates-failed', active: group.now, results, allowSwitch: body.switch !== false, commit });
+      return { status: 502, body: { error: `${region.label}节点全部测速失败`, code: 'all-candidates-failed', reasonCode: 'all-candidates-failed', switched: false, decision, commit, results } };
+    }
 
     const decision = await applySelectorDecision({
       backend,
@@ -859,17 +932,34 @@ async function runAutomaticOptimize(body = {}) {
     if (currentRegion === 'other') return { status: 200, body: { skipped: true, reason: '当前节点地区无法识别', code: 'unknown-current-region', group: group.name, current: group.now } };
 
     const scope = scopedHealth(backend, group.name);
+    const decisionHealth = healthSnapshot();
+    const measuredForHealth = [];
     const samples = runtime.settings.samples;
     const candidates = group.members.filter((name) => regionFor(name) === currentRegion);
     let results = candidates.length ? await mapLimit(candidates, 6, (name) => measureNodeStable(name, DEFAULT_TEST_URL, 5000, samples, request, job), { signal: job.signal }) : [];
-    updateHealth(results, scope);
+    addMeasured(measuredForHealth, results);
     let currentResult = results.find((item) => item.name === group.now) || null;
-    let ranked = decisionCore.rankCandidates(results, healthByName(results, scope), runtime.settings, { now: Date.now(), scopeKey: scopedGroupKey(backend, group.name) });
+    let ranked = decisionCore.rankCandidates(results, healthByName(results, scope, decisionHealth), runtime.settings, { now: Date.now(), scopeKey: scopedGroupKey(backend, group.name) });
     let best = ranked.best?.result || null;
     let fallbackFrom = null;
     let hardFailure = Boolean(currentResult && !currentResult.ok);
+    const resultBatches = candidates.length ? [{ target: DEFAULT_TEST_URL, fallbackFrom: null, candidates: [...candidates], results }] : [];
 
     if (!best) {
+      const sameRegionVerify = candidates.length ? await mapLimit(candidates, 6, (name) => measureNodeStable(name, VERIFY_TEST_URL, 5000, samples, request, job), { signal: job.signal }) : [];
+      addMeasured(measuredForHealth, sameRegionVerify);
+      if (sameRegionVerify.length) resultBatches.push({ target: VERIFY_TEST_URL, fallbackFrom: null, candidates: [...candidates], results: sameRegionVerify });
+      const verifyRanked = decisionCore.rankCandidates(sameRegionVerify, healthByName(sameRegionVerify, scope, decisionHealth), runtime.settings, { now: Date.now(), scopeKey: scopedGroupKey(backend, group.name) });
+      const verifyBest = verifyRanked.best?.result || null;
+      if (verifyBest) {
+        updateHealth(measuredForHealth, scope);
+        const reason = '默认探测目标可能不可用，已保留当前节点';
+        const decision = selectorDecisionEvent({ code: 'target-service-outage', reason, active: group.now, best: verifyBest, current: currentResult, results: sameRegionVerify, allowSwitch: true });
+        const body = { skipped: true, switched: false, reason, code: 'target-service-outage', reasonCode: 'target-service-outage', group: group.name, region: currentRegion, active: group.now, best: verifyBest, results: sameRegionVerify, resultBatches, decision, commit: decision.commit };
+        addHistory({ group: group.name, backend: backend.id, skipped: true, reason, code: body.code, region: currentRegion });
+        return { status: 200, body };
+      }
+
       fallbackFrom = currentRegion;
       hardFailure = true;
       const alternatives = group.members.filter((name) => {
@@ -877,15 +967,18 @@ async function runAutomaticOptimize(body = {}) {
         return region !== 'other' && region !== currentRegion;
       });
       const fallbackResults = await mapLimit(alternatives, 6, (name) => measureNodeStable(name, VERIFY_TEST_URL, 5000, samples, request, job), { signal: job.signal });
-      updateHealth(fallbackResults, scope);
+      addMeasured(measuredForHealth, fallbackResults);
+      if (fallbackResults.length) resultBatches.push({ target: VERIFY_TEST_URL, fallbackFrom, candidates: [...alternatives], results: fallbackResults });
       const decisionInputs = currentResult ? [...fallbackResults, currentResult] : fallbackResults;
-      ranked = decisionCore.rankCandidates(decisionInputs, healthByName(decisionInputs, scope), runtime.settings, { now: Date.now(), scopeKey: scopedGroupKey(backend, group.name) });
+      ranked = decisionCore.rankCandidates(decisionInputs, healthByName(decisionInputs, scope, decisionHealth), runtime.settings, { now: Date.now(), scopeKey: scopedGroupKey(backend, group.name) });
       best = ranked.scored.filter((item) => fallbackResults.some((result) => result.name === item.name)).find((item) => item.ok)?.result || null;
       results = fallbackResults;
     }
 
     if (!best) {
-      const body = { skipped: true, reason: '所有可识别地区节点测速全部失败', code: 'all-candidates-failed', group: group.name, region: currentRegion, fallbackFrom, results };
+      updateHealth(measuredForHealth, scope);
+      const decision = selectorDecisionEvent({ code: 'all-candidates-failed', reason: '所有可识别地区节点测速全部失败', active: group.now, current: currentResult, results, allowSwitch: true });
+      const body = { skipped: true, switched: false, reason: '所有可识别地区节点测速全部失败', code: 'all-candidates-failed', reasonCode: 'all-candidates-failed', group: group.name, region: currentRegion, fallbackFrom, results, resultBatches, decision, commit: decision.commit };
       addHistory({ group: group.name, backend: backend.id, skipped: true, reason: body.reason, code: body.code, region: currentRegion });
       return { status: 200, body };
     }
@@ -894,7 +987,7 @@ async function runAutomaticOptimize(body = {}) {
       currentName: group.now,
       results,
       currentResult,
-      healthByName: healthByName(currentResult ? [...results, currentResult] : results, scope),
+      healthByName: healthByName(currentResult ? [...results, currentResult] : results, scope, decisionHealth),
       settings: runtime.settings,
       lastSwitchAt: getLastSwitch(backend, group.name),
       allowSwitch: true,
@@ -903,25 +996,29 @@ async function runAutomaticOptimize(body = {}) {
       now: Date.now(),
       scopeKey: scopedGroupKey(backend, group.name)
     });
-    const selectedRegion = regionFor(decisionEvent.target || best.name);
     const orderedResults = scoredResultsFromDecision(decisionEvent);
     best = scoredResult(decisionEvent.evidence.best) || best;
-    const improvement = decisionEvent.scoreDeltaMs;
-    let decision = { active: group.now, switched: false, reasonCode: decisionEvent.code, decisionEvent };
+    const improvement = decisionEvent.scoreDeltaRoundedMs;
+    let decision = { active: group.now, switched: false, reasonCode: decisionEvent.code, decisionEvent, commit: selectorCommitState({ reasonCode: decisionEvent.code, active: group.now, target: decisionEvent.target }) };
+    let finalDecisionEvent = { ...decisionEvent, commit: decision.commit };
     if (decisionEvent.action === 'switch') {
       decision = {
         ...(await applySelectorDecision({ backend, request, group, target: decisionEvent.target, allowSwitch: true, jobKind: 'auto', job })),
         decisionEvent
       };
+      finalDecisionEvent = finalizedDecisionEvent(decisionEvent, decision);
     }
+    const selectedRegion = regionFor(finalDecisionEvent.target || decision.active || best.name);
 
     if (decision.reasonCode === 'external-change') {
-      const body = { skipped: true, reason: '检测到手动切换，已暂停自动切换', code: decision.reasonCode, lockMs: decision.lockMs, group: group.name, active: decision.active, results: orderedResults, decision: decisionEvent };
+      updateHealth(measuredForHealth, scope);
+      const body = { skipped: true, reason: '检测到手动切换，已暂停自动切换', code: decision.reasonCode, lockMs: decision.lockMs, group: group.name, active: decision.active, results: orderedResults, decision: finalDecisionEvent, commit: decision.commit };
       addHistory({ group: group.name, backend: backend.id, skipped: true, reason: body.reason, code: body.code, lockMs: decision.lockMs });
       return { status: 200, body };
     }
 
     setLastAuto(backend, group.name, decision.active);
+    updateHealth(measuredForHealth, scope);
     runtime.lastResults = {
       at: new Date().toISOString(),
       source: 'automatic',
@@ -930,7 +1027,7 @@ async function runAutomaticOptimize(body = {}) {
       active: decision.active,
       region: selectedRegion,
       reasonCode: decision.reasonCode,
-      decision: decisionEvent,
+      decision: finalDecisionEvent,
       results: orderedResults.map(({ name, delay, ok, error, successCount, failureCount, jitter, score, scoring }) => ({ name, delay, ok, error, successCount, failureCount, jitter, score, scoring }))
     };
     persistRuntimeState();
@@ -949,8 +1046,9 @@ async function runAutomaticOptimize(body = {}) {
       candidates: orderedResults.length,
       improvement,
       score: best.score ?? Math.round(healthScore(best, scope)),
-      decision: decisionEvent,
-      reasonCode: decision.reasonCode
+      decision: finalDecisionEvent,
+      reasonCode: decision.reasonCode,
+      commit: decision.commit
     };
     addHistory(entry);
     return { status: 200, body: { jobId: job.id, ...entry, lockMs: lockRemainingFor(backend, group.name), results: orderedResults, commit: decision.commit } };

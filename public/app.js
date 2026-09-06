@@ -134,6 +134,8 @@ const text = {
     switchApproved: 'Switch approved by score policy',
     switched: 'Selector write verified',
     writeNotApplied: 'Write was not confirmed by readback',
+    writeResultUnknown: 'Selector write result is unknown',
+    alreadyActive: 'Target selector is already active',
     noHealthyCandidate: 'No healthy candidate',
     commonProbeFailure: 'Common probe failure, kept current node',
     targetServiceOutage: 'Target probe likely unavailable',
@@ -270,6 +272,8 @@ const text = {
     switchApproved: '评分策略批准切换',
     switched: '代理组写入已读回确认',
     writeNotApplied: '写入未被读回确认',
+    writeResultUnknown: '代理组写入结果未知',
+    alreadyActive: '目标节点已是当前选择',
     noHealthyCandidate: '没有健康候选',
     commonProbeFailure: '共同探测失败，保留当前节点',
     targetServiceOutage: '目标探测服务疑似不可用',
@@ -309,6 +313,8 @@ const codeLabels = {
   'switch-approved': 'switchApproved',
   switched: 'switched',
   'write-not-applied': 'writeNotApplied',
+  'write-result-unknown': 'writeResultUnknown',
+  'already-active': 'alreadyActive',
   'no-healthy-candidate': 'noHealthyCandidate',
   'common-probe-failure': 'commonProbeFailure',
   'target-service-outage': 'targetServiceOutage',
@@ -626,7 +632,8 @@ function renderDecision(data) {
   if (event?.action) rows.push([tr('decisionAction'), tr(event.action)]);
   if (event?.reason) rows.push([tr('decisionReason'), decisionMessage(event.code)]);
   if (event?.target) rows.push([tr('decisionTarget'), event.target]);
-  if (event?.scoreDeltaMs !== undefined && event.scoreDeltaMs !== null) rows.push([tr('decisionScore'), `${Number(event.scoreDeltaMs).toFixed(1)} ms`]);
+  const scoreDelta = event?.scoreDeltaRoundedMs ?? event?.scoreDeltaMs;
+  if (scoreDelta !== undefined && scoreDelta !== null) rows.push([tr('decisionScore'), `${scoreDelta} ms`]);
   if (event?.thresholdMs !== undefined && event.thresholdMs !== null) rows.push([tr('decisionThreshold'), `${event.thresholdMs} ms`]);
   if (event?.protection) {
     rows.push([tr('decisionCooldown'), event.protection.remainingCooldownMs ? tr('cooldownRemaining', { seconds: Math.ceil(event.protection.remainingCooldownMs / 1000) }) : tr('cooldownNone')]);
@@ -669,6 +676,7 @@ function manualResultMessage(data) {
   if (data.reasonCode === 'external-change') return tr('manualExternal');
   if (data.reasonCode === 'switch-disabled') return tr('manualDisabled', { score: scoreForMessage(data) });
   if (data.reasonCode === 'write-not-applied') return tr('manualWriteMiss');
+  if (data.reasonCode === 'write-result-unknown') return tr('writeResultUnknown');
   if (data.switched) return tr('manualSwitched', { score: scoreForMessage(data) });
   return tr('manualHeld', { score: scoreForMessage(data) });
 }

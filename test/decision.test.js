@@ -59,6 +59,23 @@ test('cooldown holds an otherwise better node when current is still healthy', ()
   assert.equal(decision.protection.remainingCooldownMs, 3 * 60 * 1000);
 });
 
+test('cooldown treats unix epoch zero as a valid switch timestamp', () => {
+  const decision = decideSwitch({
+    currentName: 'Node A',
+    results: [
+      { name: 'Node A', ok: true, delay: 100, successCount: 1, failureCount: 0 },
+      { name: 'Node B', ok: true, delay: 60, successCount: 1, failureCount: 0 }
+    ],
+    settings: { switchThresholdMs: 25, switchCooldownMinutes: 5 },
+    lastSwitchAt: 0,
+    now: 2 * 60 * 1000
+  });
+
+  assert.equal(decision.action, 'hold');
+  assert.equal(decision.code, 'cooldown-active');
+  assert.equal(decision.protection.remainingCooldownMs, 3 * 60 * 1000);
+});
+
 test('hard failure bypasses cooldown and approves a switch', () => {
   const decision = decideSwitch({
     currentName: 'Node A',
@@ -91,4 +108,21 @@ test('score delta threshold uses the same scored ranking as recommendation', () 
   assert.equal(decision.evidence.best.name, 'Stable');
   assert.equal(decision.action, 'hold');
   assert.equal(decision.code, 'current-best');
+});
+
+test('score delta threshold compares raw scores before display rounding', () => {
+  const decision = decideSwitch({
+    currentName: 'Node A',
+    results: [
+      { name: 'Node A', ok: true, delay: 100, successCount: 1, failureCount: 0 },
+      { name: 'Node B', ok: true, delay: 75.4, successCount: 1, failureCount: 0 }
+    ],
+    settings: { switchThresholdMs: 25, switchCooldownMinutes: 0 },
+    now
+  });
+
+  assert.equal(decision.action, 'hold');
+  assert.equal(decision.code, 'below-threshold');
+  assert.equal(decision.scoreDeltaRoundedMs, 25);
+  assert.ok(Math.abs(decision.scoreDeltaMs - 24.6) < 0.000001);
 });

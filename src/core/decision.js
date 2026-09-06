@@ -123,17 +123,19 @@ function decideSwitch({
   const thresholdMs = Math.max(0, finiteNumber(mergedSettings.switchThresholdMs, DEFAULT_DECISION_SETTINGS.switchThresholdMs));
   const cooldownMs = Math.max(0, finiteNumber(mergedSettings.switchCooldownMinutes, DEFAULT_DECISION_SETTINGS.switchCooldownMinutes) * 60000);
   const lastSwitchTime = parseTimestamp(lastSwitchAt);
-  const remainingCooldownMs = lastSwitchTime && cooldownMs ? Math.max(0, (lastSwitchTime + cooldownMs) - now) : 0;
+  const remainingCooldownMs = lastSwitchTime !== null && cooldownMs ? Math.max(0, (lastSwitchTime + cooldownMs) - now) : 0;
   const currentHardFailed = Boolean(hardFailure || currentResult?.ok === false || (currentScore && !currentScore.ok));
   const scoreDeltaMs = best && currentScore && Number.isFinite(currentScore.score)
-    ? Math.round(currentScore.score - best.score)
+    ? currentScore.score - best.score
     : (best ? null : 0);
+  const scoreDeltaRoundedMs = scoreDeltaMs === null ? null : Math.round(scoreDeltaMs);
   const base = {
     at: new Date(now).toISOString(),
     current: currentName,
     target: best?.name || null,
     thresholdMs,
     scoreDeltaMs,
+    scoreDeltaRoundedMs,
     protection: {
       monitorOnly: Boolean(monitorOnly),
       allowSwitch: Boolean(allowSwitch),
