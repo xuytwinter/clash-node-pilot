@@ -310,6 +310,8 @@ try {
   Assert-Check ($health.ok -eq $true -and [int]$health.port -eq $port) 'Installed bundled runtime served health on an isolated random port.'
   $package = Get-Content -LiteralPath (Join-Path $app 'package.json') -Raw | ConvertFrom-Json
   Assert-Check ($health.version -eq $package.version) 'Installed health reports the packaged version.'
+  $code = Invoke-Installer 'powershell.exe' @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $app 'startup-watchdog.ps1')`"", '-Port', "$port")
+  Assert-Check ($code -eq 0 -and -not $appProcess.HasExited) 'Installed watchdog recognized its exact process and listening socket.'
   $session = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/session" -TimeoutSec 3
   Assert-Check ($session.token -match '^[a-f0-9]{64}$') 'Installed application issued a local session.'
   $headers = @{ 'x-pilot-session' = $session.token }

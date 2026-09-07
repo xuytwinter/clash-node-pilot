@@ -145,6 +145,9 @@ async function main() {
   const status = await (await request('/api/status', { headers: { 'x-pilot-session': newSession.token } })).json();
   assert.equal(status.automation.monitorOnly, true);
   await stop(child);
+  const invalidConfig = start(bin, { ...env, CLASH_CONFIG: path.join(root, 'missing.yaml') });
+  await until(() => ended(invalidConfig), 'Invalid explicit config did not fail', 8000);
+  assert.equal(invalidConfig.exitCode, 7);
   blocker.listen(port, '127.0.0.1');
   await once(blocker, 'listening');
   const conflict = start(bin, env);
@@ -152,7 +155,7 @@ async function main() {
   assert.notEqual(conflict.exitCode, 0);
   assert.equal(await (await request('/')).text(), 'unrelated');
   console.log(JSON.stringify({ ok: true, architecture: arch, source: metadata.sourceSha,
-    checks: ['dmg-install', 'signature', 'unicode-path', 'sessions', 'selector-readback', 'diagnostics', 'repeat-launch', 'state-restart', 'quit-cleanup', 'occupied-port'] }));
+    checks: ['dmg-install', 'signature', 'unicode-path', 'sessions', 'selector-readback', 'diagnostics', 'repeat-launch', 'state-restart', 'quit-cleanup', 'invalid-config', 'occupied-port'] }));
 }
 main().catch(error => { console.error(error.stack, output); process.exitCode = 1; }).finally(async () => {
   for (const child of children) {

@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var port = defaultPort
     private var instance = UUID().uuidString
     private var stopping = false
+    private var configOverride: String?
     private var terminationSignal: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -57,8 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func resource(_ name: String) -> URL? { Bundle.main.resourceURL?.appendingPathComponent(name) }
 
     private func selectedConfig() -> String? {
+        if let configOverride { return configOverride }
         let env = ProcessInfo.processInfo.environment["CLASH_CONFIG"]
-        if let env, !env.isEmpty, FileManager.default.fileExists(atPath: env) { return env }
+        if let env, !env.isEmpty { return env }
         if let saved = UserDefaults.standard.string(forKey: "controllerConfigPath"), FileManager.default.fileExists(atPath: saved) { return saved }
         let fallback = appSupport.appendingPathComponent("controller.yaml").path
         return FileManager.default.fileExists(atPath: fallback) ? fallback : nil
@@ -66,8 +68,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @discardableResult private func startNode() -> Bool {
         guard node == nil else { return true }
+        let config = selectedConfig()
+        if let config {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: config, isDirectory: &isDirectory),
+                  !isDirectory.boolValue, FileManager.default.isReadableFile(atPath: config) else {
+                fail("The selected controller configuration is not a readable file. Check CLASH_CONFIG or select another configuration.", code: 7)
+                return false
+            }
+        }
         guard !portIsOccupied(port) else { fail("Port \(port) is already in use. Choose another PORT or stop the owning service.", code: 2); return false }
-        guard let executable = resource("app/runtime/node") ?? resource("runtime/node"), let server = resource("app/server.js") else {
+        guard let executable = resource("app/runtime/node"), let server = resource("app/server.js") else {
             fail("The app bundle is missing runtime/node or app/server.js.", code: 3); return false
         }
         let process = Process()
@@ -76,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var environment = ProcessInfo.processInfo.environment
         environment["PORT"] = String(port)
         environment["CLASH_PILOT_INSTANCE"] = instance
-        if let config = selectedConfig() { environment["CLASH_CONFIG"] = config }
+        if let config { environment["CLASH_CONFIG"] = config }
         process.environment = environment
         process.standardOutput = FileHandle.standardOutput
         process.standardError = FileHandle.standardError
@@ -168,6 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        configOverride = url.path
         UserDefaults.standard.set(url.path, forKey: "controllerConfigPath")
         stopNode()
         _ = startNode()

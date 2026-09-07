@@ -2,7 +2,7 @@
 
 [中文](README.zh-CN.md) | [Delivery roadmap / 路线图](docs/ROADMAP.md)
 
-Clash Node Pilot is a local Windows dashboard for testing and switching Clash/Mihomo selector nodes by region and health score. It talks to the Mihomo external controller on the same machine, keeps controller secrets on the Node.js backend, and sends selector changes with PUT, then reads the controller state back and reports success only when the requested selection is confirmed.
+Clash Node Pilot is a local Windows and macOS dashboard for testing and switching Clash/Mihomo selector nodes by region and health score. It talks to the Mihomo external controller on the same machine, keeps controller secrets on the Node.js backend, and sends selector changes with PUT, then reads the controller state back and reports success only when the requested selection is confirmed.
 
 > Unofficial project. Clash Node Pilot is not affiliated with Clash Verge Rev, Clash for Windows, Mihomo, v2rayN, OpenAI, or any proxy provider.
 
@@ -10,18 +10,19 @@ Clash Node Pilot is a local Windows dashboard for testing and switching Clash/Mi
 
 ![English dashboard using the isolated fake-controller demo](docs/images/demo-desktop.png)
 
-- Windows 10/11 x64 portable package.
+- Windows 10/11 x64 per-user installer and portable package.
+- macOS 13+ Apple Silicon and Intel DMGs with a native menu-bar launcher; see [installation and verification limits](docs/macos-delivery.md).
 - Clash Verge Rev, Clash for Windows, or another Clash/Mihomo-compatible client with an enabled local external controller.
-- v2rayN 7.x detection is read-only in v0.3.0.
-- Node.js 22.x is the CI-supported source runtime. The release zip bundles official Node.js 22.x for Windows x64.
+- v2rayN 7.x detection remains read-only on Windows.
+- Node.js 22.x is the CI-supported source runtime, bundled in every desktop package.
 
-No macOS, Linux, Android, iOS, Electron, browser extension, or ChatGPT/OpenAI integration is included in v0.3.0.
+No Linux desktop, Android, iOS, Electron, browser extension, or ChatGPT/OpenAI integration is included. macOS packages are ad-hoc signed, not Developer ID signed or notarized; Windows Setup is unsigned.
 
 ## Quick Start
 
-Windows 0.3.0 provides an unsigned per-user `Setup.exe` alongside the portable ZIP. Choose the installer for Start Menu launch/stop shortcuts; see the [installer guide](docs/windows-installer.md). Published assets and checksums are listed in [Releases](https://github.com/xuytwinter/clash-node-pilot/releases).
+Version 0.4.0 provides Windows `Setup.exe` and portable ZIP, plus macOS `arm64.dmg` and `x64.dmg`. Choose the Windows installer for Start Menu launch/stop shortcuts; see the [installer guide](docs/windows-installer.md). On Mac, mount the matching DMG, drag the application to Applications and launch it; **CN > Quit** stops its service. See the [Mac guide](docs/macos-delivery.md) for controller selection and Gatekeeper limitations. Published assets and checksums are listed in [Releases](https://github.com/xuytwinter/clash-node-pilot/releases).
 
-1. Obtain `clash-node-pilot-v0.3.0-windows-x64-portable.zip` and its checksum from [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases). Only tagged releases provide published assets.
+1. For Windows portable use, obtain `clash-node-pilot-v0.4.0-windows-x64-portable.zip` and its checksum from [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases). Only tagged releases provide published assets.
 2. Extract it to any local folder, including paths with spaces or Chinese characters.
 3. Double-click `start-clash-node-pilot.cmd`.
 4. Open `http://127.0.0.1:3210` if the browser does not open automatically.
@@ -111,7 +112,7 @@ The watchdog checks only this project's `/api/health`; controller disconnection 
 
 ## Upgrade and Rollback
 
-When upgrading to 0.3.0, stop the old Node Pilot instance, back up the state file and its `.bak`, and extract the package into a separate folder. Keep `CLASH_PILOT_STATE` consistent if customized, and reinstall startup entries from the new folder. Default state lives outside the application folder and is retained.
+When upgrading, stop the old Node Pilot instance, back up the state file and its `.bak`, and extract the package into a separate folder. Keep `CLASH_PILOT_STATE` consistent if customized, and reinstall Windows startup entries from the new folder. Default state lives outside the application folder and is retained. macOS state uses `~/Library/Application Support/ClashNodePilot/state.json`.
 
 Supported older state is sanitized and migrated; invalid input is preserved and a valid backup is used when available. A newer unknown schema disables state writes and mutating actions. For rollback, use the older application with a separate copy of its matching pre-upgrade state, rather than overwriting newer state. Isolated migration and recovery tests do not establish successful upgrades on users' real machines. See [Compatibility](docs/compatibility.md).
 
@@ -134,8 +135,10 @@ The version defaults to `package.json`. Packaging preserves old ZIPs, refuses to
 
 Candidate outputs:
 
-- `outputs\clash-node-pilot-v0.3.0-windows-x64-portable.zip`
-- `outputs\clash-node-pilot-v0.3.0-windows-x64-portable.zip.sha256`
+- `outputs\clash-node-pilot-v0.4.0-windows-x64-portable.zip`
+- `outputs\clash-node-pilot-v0.4.0-windows-x64-portable.zip.sha256`
+
+On macOS, use `bash scripts/build-macos.sh` followed by `bash scripts/smoke-macos.sh`; see the [Mac build guide](docs/macos-delivery.md).
 
 ## Documentation
 

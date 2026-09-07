@@ -38,12 +38,59 @@ test('Windows health survives controller disconnect without process changes', { 
   const dir = fixture(t);
   const result = powershell(`
     function Invoke-RestMethod { param($Uri) Write-Host $Uri; return @{ok=$true; port=43210; connected=$false} }
+    function Get-CimInstance {
+      [pscustomobject]@{
+        ProcessId = 1234
+        ExecutablePath = ${quote(path.join(dir, 'runtime', 'node.exe'))}
+        CommandLine = '"' + ${quote(path.join(dir, 'runtime', 'node.exe'))} + '" "' + ${quote(path.join(dir, 'server.js'))} + '"'
+      }
+    }
+    function Get-NetTCPConnection { [pscustomobject]@{ OwningProcess = 1234 } }
     function Start-Process { throw 'Unexpected start' }
     function Stop-Process { throw 'Unexpected stop' }
     & ${quote(path.join(dir, 'startup-watchdog.ps1'))}
   `, { PORT: '43210' });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /http:\/\/127\.0\.0\.1:43210\/api\/health/);
+});
+
+test('Windows watchdog adopts a healthy service only when its process owns this package', { skip: !windows }, t => {
+  const dir = fixture(t);
+  const result = powershell(`
+    function Invoke-RestMethod { return @{ok=$true; port=43214} }
+    function Get-CimInstance {
+      [pscustomobject]@{
+        ProcessId = 1234
+        ExecutablePath = ${quote(path.join(dir, 'runtime', 'node.exe'))}
+        CommandLine = '"' + ${quote(path.join(dir, 'runtime', 'node.exe'))} + '" "' + ${quote(path.join(dir, 'server.js'))} + '"'
+      }
+    }
+    function Get-NetTCPConnection { [pscustomobject]@{ OwningProcess = 1234 } }
+    function Start-Process { throw 'Unexpected start' }
+    & ${quote(path.join(dir, 'startup-watchdog.ps1'))} -Port 43214
+  `);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('Windows watchdog rejects a healthy service owned by another installation', { skip: !windows }, t => {
+  const dir = fixture(t);
+  const started = path.join(dir, 'started.txt');
+  const result = powershell(`
+    function Invoke-RestMethod { return @{ok=$true; port=43215} }
+    function Get-CimInstance {
+      [pscustomobject]@{
+        ProcessId = 1234
+        ExecutablePath = ${quote(path.join(dir, 'runtime', 'node.exe'))}
+        CommandLine = 'unrelated process'
+      }
+    }
+    function Get-NetTCPConnection { [pscustomobject]@{ OwningProcess = 9999 } }
+    function Start-Process { Set-Content -LiteralPath ${quote(started)} -Value 'started' }
+    & ${quote(path.join(dir, 'startup-watchdog.ps1'))} -Port 43215
+  `);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /different local service/);
+  assert.equal(fs.existsSync(started), false, 'watchdog must not start a second service for an unrelated healthy port owner');
 });
 
 test('Windows watchdog quotes project path and uses bundled node and custom port', { skip: !windows }, t => {
@@ -61,6 +108,14 @@ test('Windows watchdog quotes project path and uses bundled node and custom port
       @{file=$FilePath; arguments=$ArgumentList; cwd=$WorkingDirectory; style=$WindowStyle; port=$env:PORT} |
         ConvertTo-Json | Set-Content -LiteralPath ${quote(capture)} -Encoding UTF8
     }
+    function Get-CimInstance {
+      [pscustomobject]@{
+        ProcessId = 1234
+        ExecutablePath = ${quote(path.join(dir, 'runtime', 'node.exe'))}
+        CommandLine = '"' + ${quote(path.join(dir, 'runtime', 'node.exe'))} + '" "' + ${quote(path.join(dir, 'server.js'))} + '"'
+      }
+    }
+    function Get-NetTCPConnection { [pscustomobject]@{ OwningProcess = 1234 } }
     function Stop-Process { throw 'Unexpected stop' }
     & ${quote(path.join(dir, 'startup-watchdog.ps1'))} -Port 43211
   `);

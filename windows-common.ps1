@@ -6,3 +6,17 @@ function Resolve-PilotPort([string]$Value) {
   }
   return [string]$number
 }
+
+function Get-PilotServerProcesses([string]$NodePath, [string]$ServerPath, [int]$Port) {
+  $node = [IO.Path]::GetFullPath($NodePath)
+  $server = [IO.Path]::GetFullPath($ServerPath)
+  $commandPattern = '^\s*"?' + [regex]::Escape($node) + '"?\s+"?' + [regex]::Escape($server) + '"?\s*$'
+  $listeners = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen -ErrorAction Stop)
+  foreach ($candidate in @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'")) {
+    if ([string]::IsNullOrWhiteSpace([string]$candidate.ExecutablePath)) { continue }
+    if ([string]$candidate.ExecutablePath -ine $node) { continue }
+    if ([string]$candidate.CommandLine -notmatch $commandPattern) { continue }
+    if (-not ($listeners | Where-Object { [int]$_.OwningProcess -eq [int]$candidate.ProcessId })) { continue }
+    $candidate
+  }
+}
