@@ -12,16 +12,16 @@ Clash Node Pilot is a local Windows dashboard for testing and switching Clash/Mi
 
 - Windows 10/11 x64 portable package.
 - Clash Verge Rev, Clash for Windows, or another Clash/Mihomo-compatible client with an enabled local external controller.
-- v2rayN 7.x detection is read-only in v0.2.0.
+- v2rayN 7.x detection is read-only in v0.3.0.
 - Node.js 22.x is the CI-supported source runtime. The release zip bundles official Node.js 22.x for Windows x64.
 
-No macOS, Linux, Android, iOS, Electron, browser extension, or ChatGPT/OpenAI integration is included in v0.2.0.
+No macOS, Linux, Android, iOS, Electron, browser extension, or ChatGPT/OpenAI integration is included in v0.3.0.
 
 ## Quick Start
 
-Windows `Setup.exe` work for 0.3.0 is documented in the [installer guide](docs/windows-installer.md). The published 0.2.0 download remains a portable ZIP until the next release passes acceptance.
+Windows 0.3.0 provides an unsigned per-user `Setup.exe` alongside the portable ZIP. Choose the installer for Start Menu launch/stop shortcuts; see the [installer guide](docs/windows-installer.md). Published assets and checksums are listed in [Releases](https://github.com/xuytwinter/clash-node-pilot/releases).
 
-1. Obtain `clash-node-pilot-v0.2.0-windows-x64-portable.zip` and its checksum from [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases). Only tagged releases provide published assets.
+1. Obtain `clash-node-pilot-v0.3.0-windows-x64-portable.zip` and its checksum from [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases). Only tagged releases provide published assets.
 2. Extract it to any local folder, including paths with spaces or Chinese characters.
 3. Double-click `start-clash-node-pilot.cmd`.
 4. Open `http://127.0.0.1:3210` if the browser does not open automatically.
@@ -111,7 +111,7 @@ The watchdog checks only this project's `/api/health`; controller disconnection 
 
 ## Upgrade and Rollback
 
-When upgrading to 0.2.0, stop the old Node Pilot instance, back up the state file and its `.bak`, and extract the package into a separate folder. Keep `CLASH_PILOT_STATE` consistent if customized, and reinstall startup entries from the new folder. Default state lives outside the application folder and is retained.
+When upgrading to 0.3.0, stop the old Node Pilot instance, back up the state file and its `.bak`, and extract the package into a separate folder. Keep `CLASH_PILOT_STATE` consistent if customized, and reinstall startup entries from the new folder. Default state lives outside the application folder and is retained.
 
 Supported older state is sanitized and migrated; invalid input is preserved and a valid backup is used when available. A newer unknown schema disables state writes and mutating actions. For rollback, use the older application with a separate copy of its matching pre-upgrade state, rather than overwriting newer state. Isolated migration and recovery tests do not establish successful upgrades on users' real machines. See [Compatibility](docs/compatibility.md).
 
@@ -134,8 +134,8 @@ The version defaults to `package.json`. Packaging preserves old ZIPs, refuses to
 
 Candidate outputs:
 
-- `outputs\clash-node-pilot-v0.2.0-windows-x64-portable.zip`
-- `outputs\clash-node-pilot-v0.2.0-windows-x64-portable.zip.sha256`
+- `outputs\clash-node-pilot-v0.3.0-windows-x64-portable.zip`
+- `outputs\clash-node-pilot-v0.3.0-windows-x64-portable.zip.sha256`
 
 ## Documentation
 

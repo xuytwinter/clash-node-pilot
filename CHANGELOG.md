@@ -1,9 +1,12 @@
 # Changelog
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-09-07
 
 - Add a public bilingual delivery roadmap linked from both READMEs.
-- Prepare a per-user Windows installer alongside the portable ZIP, with explicit installation acceptance gates.
+- Add an unsigned per-user Windows installer alongside the portable ZIP, with Start Menu launch/stop entries and optional desktop shortcuts.
+- Verify real isolated installation, same-version reinstall, state-preserving uninstall, Unicode shortcuts and runner desktop integration.
+- Reject running-runtime replacement and linked installation directories without stopping other applications.
+- Track macOS application/DMG delivery and its remaining platform checks separately.
 
 ## [0.2.0] - 2026-09-07
 

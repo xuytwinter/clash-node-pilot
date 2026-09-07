@@ -1,6 +1,6 @@
 # Windows Installer
 
-The installer is a per-user distribution of the same local-browser application as the portable ZIP. It does not install a proxy core or change proxy subscriptions. The 0.3.0 installer is under acceptance; published assets are listed in [Releases](https://github.com/xuytwinter/clash-node-pilot/releases).
+The installer is a per-user distribution of the same local-browser application as the portable ZIP. It does not install a proxy core or change proxy subscriptions. The 0.3.0 installer has passed isolated lifecycle and Windows runner desktop-integration acceptance; published assets are listed in [Releases](https://github.com/xuytwinter/clash-node-pilot/releases).
 
 ## Install and Run
 
@@ -29,5 +29,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.
 The builder checks portable payload checksums and clean source metadata. It obtains a pinned Inno Setup compiler in `work`, without installing the compiler system-wide. Existing output is preserved instead of overwritten. Installer provenance is recorded alongside its checksum.
 
 Lifecycle acceptance uses the actual EXE with `/NOINTEGRATION=1` in a unique temporary directory containing Chinese characters and spaces. This suppresses real user shortcuts and uninstall registration while exercising file installation, same-version reinstall, server startup, process ownership checks and uninstall. It is not evidence of cross-version migration, desktop shortcut behavior, signing or SmartScreen approval; those require separate verification. CI runs the same acceptance before publishing.
+
+Windows runner acceptance also exercises default Start Menu launch/stop links, optional desktop links, uninstall registration and their removal, with Unicode shell-link inspection. It confirms installation does not enable autostart. Evidence: [installer acceptance run](https://github.com/xuytwinter/clash-node-pilot/actions/runs/34138623600). This supplements isolated mode; cross-version upgrade, real-client migration and SmartScreen behavior remain unverified.
 
 See the [delivery roadmap](ROADMAP.md) for remaining gates.

@@ -1,15 +1,15 @@
 # Compatibility
 
-## Published 0.2.0
+## 0.3.0 Preview
 
 | Area | Supported scope |
 | --- | --- |
-| Operating system | Windows 10/11 x64 portable ZIP |
+| Operating system | Windows 10/11 x64 portable ZIP and per-user Setup.exe |
 | Runtime | Official Node.js 22.x Windows x64 bundled in the package |
 | Source and CI | Node.js 22.x |
 | UI | Local browser at `127.0.0.1`, port `3210` by default |
 
-0.2.0 is published. No macOS, Linux, mobile, browser-extension, Electron or installer package is included in that release. Windows installer work for 0.3.0 is tracked in the [delivery roadmap](ROADMAP.md).
+0.3.0 provides an unsigned per-user Windows installer and portable ZIP. No macOS, Linux, mobile, browser-extension or Electron package is included. See the [delivery roadmap](ROADMAP.md).
 
 ## Proxy Clients
 

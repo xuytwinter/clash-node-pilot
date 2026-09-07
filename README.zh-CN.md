@@ -12,16 +12,16 @@ Clash Node Pilot 是一个运行在 Windows 本机的 Clash/Mihomo 节点优选�
 
 - Windows 10/11 x64 便携包。
 - 已安装并正在运行 Clash Verge Rev、Clash for Windows，或其他启用了本机 external controller 的 Clash/Mihomo 客户端。
-- v2rayN 7.x 在 v0.2.0 中仅做只读检测。
+- v2rayN 7.x 在 v0.3.0 中仅做只读检测。
 - 源码与 CI 支持 Node.js 22.x；发布包内置官方 Node.js 22.x Windows x64 runtime。
 
-v0.2.0 不包含 macOS、Linux、Android、iOS、Electron、浏览器扩展或 ChatGPT/OpenAI 集成。
+v0.3.0 不包含 macOS、Linux、Android、iOS、Electron、浏览器扩展或 ChatGPT/OpenAI 集成。
 
 ## 快速开始
 
-0.3.0 的 Windows `Setup.exe` 正在验收，详见[安装程序说明](docs/windows-installer.md)。下一版通过验收前，已发布的 0.2.0 下载仍为便携 ZIP。
+Windows 0.3.0 同时提供未签名的每用户 `Setup.exe` 和便携 ZIP。安装版包含开始菜单启动与停止入口，详见[安装程序说明](docs/windows-installer.md)；正式附件与校验文件见 [Releases](https://github.com/xuytwinter/clash-node-pilot/releases)。
 
-1. 从 [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases) 获取 `clash-node-pilot-v0.2.0-windows-x64-portable.zip` 及校验文件。发布产物以已打标签的 Release 为准。
+1. 从 [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases) 获取 `clash-node-pilot-v0.3.0-windows-x64-portable.zip` 及校验文件。发布产物以已打标签的 Release 为准。
 2. 解压到任意本地目录，支持空格和中文路径。
 3. 双击 `start-clash-node-pilot.cmd`。
 4. 如果浏览器没有自动打开，手动访问 `http://127.0.0.1:3210`。
@@ -111,7 +111,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\uninstall-pilot-autostart.ps1
 
 ## 升级与回退
 
-升级到 0.2.0 时，先停止旧 Node Pilot 实例，备份状态文件及其 `.bak`，再将便携包解压到独立目录。自定义 `CLASH_PILOT_STATE` 时保持路径一致，并从新目录重新安装启动项。默认状态位于应用目录之外，升级时保留。
+升级到 0.3.0 时，先停止旧 Node Pilot 实例，备份状态文件及其 `.bak`，再将便携包解压到独立目录。自定义 `CLASH_PILOT_STATE` 时保持路径一致，并从新目录重新安装启动项。默认状态位于应用目录之外，升级时保留。
 
 兼容的旧状态会经过校验和迁移；损坏文件先保留，再尝试恢复有效备份。遇到较新的未知 schema 时，禁止状态写入及修改操作。回退需使用旧程序与配套的升级前状态副本，勿让旧程序覆盖新版状态。隔离迁移和恢复测试不等于用户真实机器上的升级已经验证，详见 [兼容性](docs/compatibility.md)。
 
@@ -134,8 +134,8 @@ npm run smoke:package
 
 候选输出：
 
-- `outputs\clash-node-pilot-v0.2.0-windows-x64-portable.zip`
-- `outputs\clash-node-pilot-v0.2.0-windows-x64-portable.zip.sha256`
+- `outputs\clash-node-pilot-v0.3.0-windows-x64-portable.zip`
+- `outputs\clash-node-pilot-v0.3.0-windows-x64-portable.zip.sha256`
 
 ## 文档
 
