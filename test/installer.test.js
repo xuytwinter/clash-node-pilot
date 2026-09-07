@@ -2,12 +2,44 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const { execFileSync, spawnSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
 const script = path.join(root, 'scripts', 'smoke-installer.ps1');
 const version = require('../package.json').version;
 const setup = process.env.CLASH_PILOT_TEST_INSTALLER || path.join(root, 'outputs', `clash-node-pilot-v${version}-windows-x64-setup.exe`);
+
+test('IShellLinkW round-trips Chinese target, arguments and working directory without ANSI loss', { skip: process.platform !== 'win32' }, () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'pilot-unicode-link-'));
+  const command = `
+    $ErrorActionPreference = 'Stop'
+    $tokens=$null; $errors=$null
+    $ast=[Management.Automation.Language.Parser]::ParseFile($env:PILOT_SMOKE_SCRIPT,[ref]$tokens,[ref]$errors)
+    if ($errors.Count) { throw 'Smoke script parse failed' }
+    $definition=$ast.Find({param($item) $item -is [Management.Automation.Language.CommandAst] -and $item.GetCommandName() -eq 'Add-Type'},$true)
+    . ([scriptblock]::Create($definition.Extent.Text))
+    $label=[string][char]0x4e2d+[char]0x6587
+    $directory=Join-Path $env:PILOT_LINK_FIXTURE ('application '+$label)
+    [IO.Directory]::CreateDirectory($directory) | Out-Null
+    $target=Join-Path $directory 'start.cmd'
+    [IO.File]::WriteAllText($target,'exit /b 0')
+    $file=Join-Path $env:PILOT_LINK_FIXTURE 'unicode.lnk'
+    $arguments='--label '+$label
+    [PilotUnicodeShortcut]::WriteTestFixture($file,$target,$directory,$arguments)
+    $actual=[PilotUnicodeShortcut]::Read($file)
+    if ($actual.TargetPath -cne $target -or $actual.WorkingDirectory -cne $directory -or $actual.Arguments -cne $arguments) { throw 'IShellLinkW Unicode roundtrip failed' }
+    if ($actual.TargetPath.Contains('?')) { throw 'Unicode target contains a literal question mark' }
+  `;
+  try {
+    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      cwd: root, encoding: 'utf8', windowsHide: true, timeout: 20000,
+      env: { ...process.env, PILOT_SMOKE_SCRIPT: script, PILOT_LINK_FIXTURE: fixture }
+    });
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
 
 test('shortcut path handling accepts COM quote pairs and rejects malformed paths', { skip: process.platform !== 'win32' }, () => {
   const command = `

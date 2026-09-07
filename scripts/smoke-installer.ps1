@@ -28,10 +28,62 @@ $desktopLink = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Clash Node P
 
 Add-Type -TypeDefinition @'
 using System.Text;
+using System;
 using System.Runtime.InteropServices;
 public static class PilotInstallerPaths {
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern uint GetLongPathName(string path, StringBuilder result, uint length);
+}
+[ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IPilotShellLinkW {
+    void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder value, int count, IntPtr findData, uint flags);
+    void GetIDList(out IntPtr value);
+    void SetIDList(IntPtr value);
+    void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder value, int count);
+    void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string value);
+    void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder value, int count);
+    void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string value);
+    void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder value, int count);
+    void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string value);
+    void GetHotkey(out short value);
+    void SetHotkey(short value);
+    void GetShowCmd(out int value);
+    void SetShowCmd(int value);
+    void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder value, int count, out int index);
+    void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string value, int index);
+    void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string value, uint reserved);
+    void Resolve(IntPtr window, uint flags);
+    void SetPath([MarshalAs(UnmanagedType.LPWStr)] string value);
+}
+public sealed class PilotShortcutValues {
+    public string TargetPath;
+    public string WorkingDirectory;
+    public string Arguments;
+}
+public static class PilotUnicodeShortcut {
+    private static object Create() {
+        return Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046")));
+    }
+    public static PilotShortcutValues Read(string path) {
+        object instance = Create();
+        try {
+            ((System.Runtime.InteropServices.ComTypes.IPersistFile)instance).Load(path, 0);
+            IPilotShellLinkW link = (IPilotShellLinkW)instance;
+            StringBuilder target = new StringBuilder(32768), working = new StringBuilder(32768), args = new StringBuilder(32768);
+            link.GetPath(target, target.Capacity, IntPtr.Zero, 4);
+            link.GetWorkingDirectory(working, working.Capacity);
+            link.GetArguments(args, args.Capacity);
+            return new PilotShortcutValues { TargetPath = target.ToString(), WorkingDirectory = working.ToString(), Arguments = args.ToString() };
+        } finally { Marshal.FinalReleaseComObject(instance); }
+    }
+    public static void WriteTestFixture(string path, string target, string working, string args) {
+        object instance = Create();
+        try {
+            IPilotShellLinkW link = (IPilotShellLinkW)instance;
+            link.SetPath(target); link.SetWorkingDirectory(working); link.SetArguments(args);
+            ((System.Runtime.InteropServices.ComTypes.IPersistFile)instance).Save(path, true);
+        } finally { Marshal.FinalReleaseComObject(instance); }
+    }
 }
 '@
 
@@ -77,24 +129,17 @@ function Read-IntegrationSnapshot {
 function Assert-Shortcut([string]$LinkPath, [string]$Target, [string]$Arguments) {
   $script:phase = "shortcut:$(Split-Path -Leaf $LinkPath)"
   Assert-Check (Test-Path -LiteralPath $LinkPath -PathType Leaf) "Installer created $(Split-Path -Leaf $LinkPath)."
-  $shell = New-Object -ComObject WScript.Shell
-  $link = $null
-  try {
-    $link = $shell.CreateShortcut($LinkPath)
-    $context = @{ link = $LinkPath; target = $link.TargetPath; workingDirectory = $link.WorkingDirectory; arguments = $link.Arguments } | ConvertTo-Json -Compress
+    $link = [PilotUnicodeShortcut]::Read($LinkPath)
+    $context = @{ link = $LinkPath; target = $link.TargetPath; workingDirectory = $link.WorkingDirectory; arguments = $link.Arguments; targetCodepoints = @($link.TargetPath.ToCharArray() | ForEach-Object { 'U+{0:X4}' -f [int]$_ }); workingCodepoints = @($link.WorkingDirectory.ToCharArray() | ForEach-Object { 'U+{0:X4}' -f [int]$_ }) } | ConvertTo-Json -Compress
     try {
       $actualTarget = Get-LongExistingPath (ConvertFrom-ShortcutPath $link.TargetPath)
       $actualWorkingDirectory = Get-LongExistingPath (ConvertFrom-ShortcutPath $link.WorkingDirectory)
     } catch {
       throw "Shortcut path parsing failed: $context. $($_.Exception.Message)"
     }
-    Assert-Check ($actualTarget -ieq (Get-LongExistingPath $Target)) "Shortcut $(Split-Path -Leaf $LinkPath) targets the installed application."
-    Assert-Check ($link.Arguments -ceq $Arguments) "Shortcut $(Split-Path -Leaf $LinkPath) has the expected arguments."
-    Assert-Check ($actualWorkingDirectory -ieq $app) "Shortcut $(Split-Path -Leaf $LinkPath) uses its installation directory."
-  } finally {
-    if ($link) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) }
-    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
-  }
+    Assert-Check ($actualTarget -ieq (Get-LongExistingPath $Target)) "Shortcut $(Split-Path -Leaf $LinkPath) targets the installed application. $context"
+    Assert-Check ($link.Arguments -ceq $Arguments) "Shortcut $(Split-Path -Leaf $LinkPath) has the expected arguments. $context"
+    Assert-Check ($actualWorkingDirectory -ieq $app) "Shortcut $(Split-Path -Leaf $LinkPath) uses its installation directory. $context"
 }
 
 function ConvertFrom-ShortcutPath([string]$Value) {
