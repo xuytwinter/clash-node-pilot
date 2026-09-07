@@ -20,6 +20,7 @@ Each package has a SHA256 file. Installer and DMG build manifests record the sou
 - Store macOS state in `~/Library/Application Support/ClashNodePilot`; retain explicit `CLASH_PILOT_STATE` and `CLASH_CONFIG` overrides.
 - Build and exercise Apple Silicon and Intel DMGs on their matching macOS runners, alongside Windows installer lifecycle checks. Publication waits for every package gate.
 - Retain local API sessions, redacted diagnostics, coordinated jobs, state recovery, and selector PUT followed by readback.
+- Verify Windows service ownership using its executable, server command and listening socket. The release gate also installs published v0.3.0 before upgrading to v0.4.0 and checking retained state files.
 
 ## Install and Quit
 

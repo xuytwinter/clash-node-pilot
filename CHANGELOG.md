@@ -6,6 +6,7 @@
 - Add a native menu-bar launcher with controller-file selection, instance health verification and owned-service shutdown.
 - Isolate macOS configuration discovery and Application Support state paths from Windows integrations.
 - Gate combined Windows/macOS publication on package lifecycle acceptance for each architecture.
+- Verify Windows startup ownership against the process and listening socket, and add actual v0.3.0 installer upgrade acceptance.
 - Document ad-hoc macOS signing and remaining notarization, physical-device and real-client acceptance limits.
 
 ## [0.3.0] - 2026-09-07

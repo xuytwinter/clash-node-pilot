@@ -137,13 +137,20 @@ jobs:
             }
           }
 
+      - name: Obtain pinned previous installer for upgrade acceptance
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path work/previous -Force | Out-Null
+          Invoke-WebRequest -Uri 'https://github.com/xuytwinter/clash-node-pilot/releases/download/v0.3.0/clash-node-pilot-v0.3.0-windows-x64-setup.exe' -OutFile work/previous/setup.exe
+          if ((Get-FileHash work/previous/setup.exe -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'fc301269f3eabbcc54e2f2c2423c8652cecdbc26854e9ccf5f0c7aaf359efdb6') { throw 'Previous installer checksum mismatch' }
+
       - name: Build and verify Windows installer
         shell: pwsh
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -ExpectedSourceSha '${{ github.sha }}'
           if ($LASTEXITCODE -ne 0) { throw 'Windows installer build failed' }
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 -SetupPath "outputs/clash-node-pilot-v$version-windows-x64-setup.exe"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 -SetupPath "outputs/clash-node-pilot-v$version-windows-x64-setup.exe" -PreviousSetupPath work/previous/setup.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows installer acceptance failed' }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 -SetupPath "outputs/clash-node-pilot-v$version-windows-x64-setup.exe" -VerifyIntegration
           if ($LASTEXITCODE -ne 0) { throw 'Windows installer desktop integration failed' }

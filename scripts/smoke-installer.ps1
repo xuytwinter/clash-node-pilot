@@ -1,5 +1,6 @@
 param(
   [Parameter(Mandatory = $true)][string]$SetupPath,
+  [string]$PreviousSetupPath,
   [switch]$Keep,
   [switch]$VerifyIntegration
 )
@@ -8,7 +9,12 @@ $ErrorActionPreference = 'Stop'
 if ($VerifyIntegration -and ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_OS -cne 'Windows')) {
   throw 'VerifyIntegration requires a GitHub Actions Windows runner. Local user integration is forbidden.'
 }
+if ($PreviousSetupPath -and $VerifyIntegration) {
+  throw 'PreviousSetupPath requires isolated /NOINTEGRATION mode.'
+}
 $setup = (Resolve-Path -LiteralPath $SetupPath).Path
+$previousSetup = if ($PreviousSetupPath) { (Resolve-Path -LiteralPath $PreviousSetupPath).Path } else { $null }
+$expectedVersion = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\package.json') -Raw | ConvertFrom-Json).version
 $unicodeLabel = [string][char]0x4e2d + [char]0x6587
 $root = Join-Path ([IO.Path]::GetTempPath()) ("pilot installer $unicodeLabel " + [Guid]::NewGuid().ToString('N'))
 $app = Join-Path $root 'application space'
@@ -201,10 +207,25 @@ try {
   Assert-Check (-not (Test-Path -LiteralPath (Join-Path $unowned 'server.js'))) 'Rejected installation wrote no application payload.'
   $installArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$app`"")
   if (-not $VerifyIntegration) { $installArgs += '/NOINTEGRATION=1' }
+  if ($previousSetup) {
+    $phase = 'previous-install'
+    $previousArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOINTEGRATION=1', "/DIR=`"$app`"", "/LOG=`"$(Join-Path $root 'previous-install.log')`"")
+    $code = Invoke-Installer $previousSetup $previousArgs
+    Assert-Check ($code -eq 0) 'Previous released installer completed in the isolated upgrade directory.'
+    $installed = $true
+    Assert-Check (Test-Path -LiteralPath (Join-Path $app 'server.js') -PathType Leaf) 'Previous installer payload is present before upgrade.'
+    $previousPackage = Get-Content -LiteralPath (Join-Path $app 'package.json') -Raw | ConvertFrom-Json
+    Assert-Check ($previousPackage.version -eq '0.3.0') 'Previous installer payload reports the expected v0.3.0 version.'
+    $portableState = Join-Path $app 'data\state.json'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $portableState) -Force | Out-Null
+    [IO.File]::WriteAllText($portableState, $stateBytes)
+  }
   $phase = 'install'
   $code = Invoke-Installer $setup ($installArgs + "/LOG=`"$(Join-Path $root 'install.log')`"")
   Assert-Check ($code -eq 0) 'Isolated real installer completed in a Chinese and spaced directory.'
   $installed = $true
+  $currentPackage = Get-Content -LiteralPath (Join-Path $app 'package.json') -Raw | ConvertFrom-Json
+  Assert-Check ($currentPackage.version -eq $expectedVersion) "Current installer payload reports the expected v$expectedVersion version."
   if ($VerifyIntegration) {
     Assert-Shortcut $launchLink (Join-Path $app 'start-clash-node-pilot.cmd') ''
     Assert-Shortcut $stopLink (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $app 'stop-pilot.ps1')`""
@@ -221,9 +242,11 @@ try {
   }
   $node = Join-Path $app 'runtime\node.exe'
   Assert-Check (@(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.ExecutablePath -eq $node }).Count -eq 0) 'Silent installation did not start the application.'
-  $portableState = Join-Path $app 'data\state.json'
-  New-Item -ItemType Directory -Path (Split-Path -Parent $portableState) -Force | Out-Null
-  [IO.File]::WriteAllText($portableState, $stateBytes)
+  if (-not $portableState) {
+    $portableState = Join-Path $app 'data\state.json'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $portableState) -Force | Out-Null
+    [IO.File]::WriteAllText($portableState, $stateBytes)
+  }
   $phase = 'reinstall'
   $code = Invoke-Installer $setup ($installArgs + "/LOG=`"$(Join-Path $root 'reinstall.log')`"")
   Assert-Check ($code -eq 0) 'Same-version installation over an existing installation completed.'
@@ -347,9 +370,11 @@ try {
   $setupStream = [IO.File]::OpenRead($setup)
   try { $setupHash = [BitConverter]::ToString($hashAlgorithm.ComputeHash($setupStream)).Replace('-', '').ToLowerInvariant() }
   finally { $setupStream.Dispose(); $hashAlgorithm.Dispose() }
+  $mode = if ($VerifyIntegration) { 'real-installer-runner-user-integration' } elseif ($previousSetup) { 'real-installer-previous-upgrade' } else { 'real-installer-no-user-integration' }
+  $migrationLimit = if ($previousSetup) { 'Runtime state schema migration semantics and downgrade from other historical releases remain unverified.' } else { 'Cross-version migration from an older released installer is not established.' }
   $report = [pscustomobject]@{
-    ok = $true; mode = $(if ($VerifyIntegration) { 'real-installer-runner-user-integration' } else { 'real-installer-no-user-integration' }); setupSha256 = $setupHash
-    checks = $checks.ToArray(); limitations = @($(if (-not $VerifyIntegration) { 'Default registry and shortcut integration not exercised.' } else { 'Runner integration was checked without launching shortcut targets or a browser.' }), 'Reinstall uses the same build; migration from an older released installer is not established.', 'Only owned isolated application and dummy processes were started or stopped; no existing user process was modified.')
+    ok = $true; mode = $mode; setupSha256 = $setupHash
+    checks = $checks.ToArray(); limitations = @($(if (-not $VerifyIntegration) { 'Default registry and shortcut integration not exercised.' } else { 'Runner integration was checked without launching shortcut targets or a browser.' }), $(if ($previousSetup) { 'Previous installer upgrade used the supplied setup executable; its provenance must be verified separately.' } else { 'Reinstall uses the same build.' }), $migrationLimit, 'Only owned isolated application and dummy processes were started or stopped; no existing user process was modified.')
     retainedPath = $(if ($Keep) { $root } else { $null })
   }
 } catch {
