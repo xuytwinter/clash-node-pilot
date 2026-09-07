@@ -1,6 +1,4 @@
-$ErrorActionPreference = 'SilentlyContinue'
-$scriptRoot = $PSScriptRoot
-while ($true) {
-  & (Join-Path $scriptRoot 'auto-optimize.ps1')
-  Start-Sleep -Seconds 180
-}
+param([string]$Port = $env:PORT)
+# Compatibility entry point for old startup registrations; Node owns the loop.
+$ErrorActionPreference = 'Stop'
+& (Join-Path $PSScriptRoot 'startup-watchdog.ps1') -Port $Port

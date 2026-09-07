@@ -6,16 +6,18 @@ Clash Node Pilot 是一个运行在 Windows 本机的 Clash/Mihomo 节点优选�
 
 ## 支持范围
 
+![隔离模拟 Controller 的英文演示界面](docs/images/demo-desktop.png)
+
 - Windows 10/11 x64 便携包。
 - 已安装并正在运行 Clash Verge Rev、Clash for Windows，或其他启用了本机 external controller 的 Clash/Mihomo 客户端。
-- v2rayN 7.x 在 v0.1.0 中仅做只读检测。
-- 源码开发需要 Node.js 18 或更新版本；发布包内置官方 Node.js 22.x Windows x64 runtime。
+- v2rayN 7.x 在 v0.2.0 中仅做只读检测。
+- 源码与 CI 支持 Node.js 22.x；发布包内置官方 Node.js 22.x Windows x64 runtime。
 
-v0.1.0 不包含 macOS、Linux、Android、iOS、Electron、浏览器扩展或 ChatGPT/OpenAI 集成。
+v0.2.0 不包含 macOS、Linux、Android、iOS、Electron、浏览器扩展或 ChatGPT/OpenAI 集成。
 
 ## 快速开始
 
-1. 到 GitHub Releases 下载 `clash-node-pilot-v0.1.0-windows-x64-portable.zip`。
+1. 从 [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases) 获取 `clash-node-pilot-v0.2.0-windows-x64-portable.zip` 及校验文件。发布产物以已打标签的 Release 为准。
 2. 解压到任意本地目录，支持空格和中文路径。
 3. 双击 `start-clash-node-pilot.cmd`。
 4. 如果浏览器没有自动打开，手动访问 `http://127.0.0.1:3210`。
@@ -37,7 +39,7 @@ v0.1.0 不包含 macOS、Linux、Android、iOS、Electron、浏览器扩展或 C
 ## 控制台模式
 
 - 手动测速：选择代理组和地区，执行一次测速并可选切换。
-- 自动优化：定期复查当前地区，使用同一套决策策略。
+- 自动优化：使用历史健康评分、多次采样、阈值与冷却定期复查当前地区。手动测速按单次延迟排序，不使用自动优化的同一套排名策略。
 - 保通检查：对 AI 或通用代理组做固定目标探测，仅在真实节点路径异常时切换。
 - 仅监控：只记录推荐结果，不写入代理组。
 - 演示模式：启动隔离的假 Mihomo controller 和临时状态目录，不触碰真实客户端配置。
@@ -101,7 +103,21 @@ powershell.exe -ExecutionPolicy Bypass -File .\install-autostart-admin.ps1
 powershell.exe -ExecutionPolicy Bypass -File .\uninstall-pilot-autostart.ps1
 ```
 
-日志默认写入 `%LOCALAPPDATA%\ClashNodePilot`。脚本优先使用便携包内的 `runtime\node.exe`，源码开发时才回退到 `PATH` 中的 `node.exe`。
+守护脚本仅检查本项目 `/api/health`，控制器断连不会触发 Clash 重启，也不会终止 Clash 进程。自动调度由 Node 服务负责，旧 PowerShell 循环入口不再重复调度优化。`PORT` 或 `-Port` 统一指定启动、健康检查及启动项端口，默认 `3210`。脚本优先使用便携包内的 `runtime\node.exe`，源码开发时才回退到 `PATH` 中的 `node.exe`。
+
+## 升级与回退
+
+升级到 0.2.0 时，先停止旧 Node Pilot 实例，备份状态文件及其 `.bak`，再将便携包解压到独立目录。自定义 `CLASH_PILOT_STATE` 时保持路径一致，并从新目录重新安装启动项。默认状态位于应用目录之外，升级时保留。
+
+兼容的旧状态会经过校验和迁移；损坏文件先保留，再尝试恢复有效备份。遇到较新的未知 schema 时，禁止状态写入及修改操作。回退需使用旧程序与配套的升级前状态副本，勿让旧程序覆盖新版状态。隔离迁移和恢复测试不等于用户真实机器上的升级已经验证，详见 [兼容性](docs/compatibility.md)。
+
+## 本地 API 与诊断
+
+先请求 `GET /api/session` 获取 `{token}`；除 `/api/health` 和会话获取端点外，其余 `/api/` 请求均需携带 `x-pilot-session: <token>`。JSON POST 还需 `Content-Type: application/json`。浏览器自动处理会话。Host/Origin 检查与进程级令牌不防同一用户身份运行的恶意本地进程。
+
+诊断导出只保留白名单字段，删除名称、路径、端点和自由文本；标识符替换为仅在当前报告内有效的匿名索引。时间戳、时间统计、计数和固定状态码仍会保留，分享前请审阅。详见 [安全说明](SECURITY.md)。
+
+合成基准使用模拟步骤指标，各策略探测预算不相等，不代表实测网络恢复时间或生产优势。结果及取舍见 [基准方法](docs/benchmarks.md)。
 
 ## 发布打包
 
@@ -110,10 +126,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\release.ps1
 npm run smoke:package
 ```
 
-输出：
+版本默认读取 `package.json`。打包保留旧 ZIP，拒绝覆盖同版本已有产物；包内 `BUILD-INFO.json` 记录来源 SHA、工作树状态。原生命令失败会阻止构建和发布流程继续。
 
-- `outputs\clash-node-pilot-v0.1.0-windows-x64-portable.zip`
-- `outputs\clash-node-pilot-v0.1.0-windows-x64-portable.zip.sha256`
+候选输出：
+
+- `outputs\clash-node-pilot-v0.2.0-windows-x64-portable.zip`
+- `outputs\clash-node-pilot-v0.2.0-windows-x64-portable.zip.sha256`
 
 ## 文档
 

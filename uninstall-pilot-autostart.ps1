@@ -1,6 +1,1 @@
-$ErrorActionPreference = 'SilentlyContinue'
-$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-Remove-ItemProperty -Path $runKey -Name 'Clash Node Pilot'
-Remove-ItemProperty -Path $runKey -Name 'Clash Node Pilot Startup'
-Remove-ItemProperty -Path $runKey -Name 'Clash Node Pilot Optimizer'
-Write-Host 'Clash startup recovery and Node Pilot optimizer disabled.'
+& (Join-Path $PSScriptRoot 'uninstall-autostart.ps1')

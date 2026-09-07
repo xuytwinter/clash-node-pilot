@@ -33,8 +33,11 @@ jobs:
         shell: pwsh
         run: |
           npm test
+          if ($LASTEXITCODE -ne 0) { throw 'npm test failed' }
           node --check server.js
+          if ($LASTEXITCODE -ne 0) { throw 'server.js syntax check failed' }
           node --check public/app.js
+          if ($LASTEXITCODE -ne 0) { throw 'public/app.js syntax check failed' }
           $scripts = Get-ChildItem -Path . -Filter *.ps1
           foreach ($script in $scripts) {
             $tokens = $null
@@ -48,6 +51,13 @@ jobs:
         run: |
           $version = '${{ github.ref_name }}'.Substring(1)
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\release.ps1 -Version $version
+          if ($LASTEXITCODE -ne 0) { throw 'Portable package build failed' }
+
+      - name: Verify packaged API and benchmark behavior
+        shell: pwsh
+        run: |
+          node scripts/smoke-package.js
+          if ($LASTEXITCODE -ne 0) { throw 'Portable API and benchmark smoke failed' }
 
       - name: Verify package contents
         shell: pwsh
@@ -66,6 +76,9 @@ jobs:
               "clash-node-pilot-v$version-windows-x64\runtime\NODE-LICENSE",
               "clash-node-pilot-v$version-windows-x64\runtime\NODE-RUNTIME.txt",
               "clash-node-pilot-v$version-windows-x64\server.js",
+              "clash-node-pilot-v$version-windows-x64\BUILD-INFO.json",
+              "clash-node-pilot-v$version-windows-x64\windows-common.ps1",
+              "clash-node-pilot-v$version-windows-x64\start-pilot.ps1",
               "clash-node-pilot-v$version-windows-x64\public\index.html",
               "clash-node-pilot-v$version-windows-x64\regions.json"
             )) {
@@ -87,7 +100,7 @@ jobs:
         run: |
           $version = '${{ github.ref_name }}'.Substring(1)
           $zip = Resolve-Path "outputs\clash-node-pilot-v$version-windows-x64-portable.zip"
-          $smokeRoot = Join-Path $env:RUNNER_TEMP 'clash pilot smoke path with spaces'
+          $smokeRoot = Join-Path $env:RUNNER_TEMP ('clash pilot smoke path with spaces ' + [guid]::NewGuid().ToString('N'))
           Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $smokeRoot | Out-Null
           Expand-Archive -LiteralPath $zip -DestinationPath $smokeRoot -Force
@@ -102,6 +115,8 @@ jobs:
           $env:HOME = Join-Path $isolation 'Home'
           $env:CLASH_PILOT_STATE = Join-Path $isolation 'state.json'
           $env:CLASH_PILOT_DISABLE_AUTO_LOOP = '1'
+          $env:CLASH_PILOT_DISABLE_OS_INTEGRATION = '1'
+          $env:CLASH_PILOT_DEMO = '1'
           $process = Start-Process -FilePath (Join-Path $app 'runtime\node.exe') -ArgumentList @('server.js') -WorkingDirectory $app -WindowStyle Hidden -PassThru
           try {
             $deadline = (Get-Date).AddSeconds(20)
@@ -112,7 +127,7 @@ jobs:
               } catch {}
               Start-Sleep -Milliseconds 500
             } while ((Get-Date) -lt $deadline)
-            if (-not $health.ok) { throw 'Isolated /api/health smoke test failed' }
+            if (-not $health.ok -or $health.version -ne $version -or [int]$health.port -ne $port) { throw 'Isolated /api/health smoke test failed' }
             $homeResponse = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 2
             if ($homeResponse.StatusCode -ne 200) { throw 'Static page smoke test failed' }
           } finally {
@@ -140,3 +155,4 @@ jobs:
             --title "Clash Node Pilot v$version Preview" `
             --notes-file RELEASE_NOTES.md `
             --latest
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release publication failed' }

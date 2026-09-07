@@ -1,5 +1,5 @@
 param(
-  [string]$Version = '0.1.0',
+  [string]$Version,
   [string]$NodeVersion = '22.23.1'
 )
 
@@ -7,6 +7,9 @@ $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $package = Get-Content -LiteralPath (Join-Path $root 'package.json') -Raw | ConvertFrom-Json
+if (-not $Version) { $Version = $package.version }
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Release version must have format X.Y.Z' }
+if ($NodeVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Node version must have format X.Y.Z' }
 if ($package.version -ne $Version) {
   throw "package.json version $($package.version) does not match release version $Version"
 }
@@ -27,10 +30,38 @@ $outDir = Join-Path $root 'outputs'
 $zipName = "$stageName-portable.zip"
 $zipPath = Join-Path $outDir $zipName
 $shaPath = "$zipPath.sha256"
+if ((Test-Path -LiteralPath $zipPath) -or (Test-Path -LiteralPath $shaPath)) {
+  throw "Release assets already exist for $Version; move them before rebuilding this version."
+}
+$sourceSha = & git -C $root rev-parse HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Cannot determine build source SHA.' }
+$sourceStatus = & git -C $root status --porcelain=v1 --untracked-files=normal
+if ($LASTEXITCODE -ne 0) { throw 'Cannot determine build working tree state.' }
 
-Remove-Item -LiteralPath $buildDir -Recurse -Force -ErrorAction SilentlyContinue
+function Assert-BuildPath([string]$Path) {
+  $workspace = [System.IO.Path]::GetFullPath($root).TrimEnd('\')
+  $owned = [System.IO.Path]::GetFullPath((Join-Path $workspace 'work\release')).TrimEnd('\')
+  $target = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+  if ($target -ne $owned -and -not $target.StartsWith("$owned\", [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing build operation outside work\release: $target"
+  }
+  # A junction in the output ancestry could redirect a recursive removal elsewhere.
+  $current = $target
+  while ($current -and $current.Length -ge $workspace.Length) {
+    if (Test-Path -LiteralPath $current) {
+      $item = Get-Item -LiteralPath $current -Force
+      if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        throw "Refusing build operation through a reparse point: $current"
+      }
+    }
+    $current = Split-Path -Parent $current
+  }
+  return $target
+}
+
+$buildDir = Assert-BuildPath $buildDir
+if (Test-Path -LiteralPath $buildDir) { Remove-Item -LiteralPath $buildDir -Recurse -Force }
 New-Item -ItemType Directory -Path $cacheDir, $stageDir, $outDir -Force | Out-Null
-Get-ChildItem -LiteralPath $outDir -Filter 'clash-node-pilot-*.zip*' -File -ErrorAction SilentlyContinue | Remove-Item -Force
 
 if (-not (Test-Path $downloadPath)) {
   Invoke-WebRequest -Uri $nodeUrl -OutFile $downloadPath
@@ -56,7 +87,9 @@ foreach ($licenseFile in @('LICENSE', 'NOTICE', 'README.md', 'CHANGELOG.md')) {
 }
 
 $nodeExe = Join-Path $runtimeDir 'node.exe'
-$resolvedNodeVersion = (& $nodeExe --version).Trim()
+$resolvedNodeVersion = & $nodeExe --version
+if ($LASTEXITCODE -ne 0) { throw 'Bundled node.exe --version failed.' }
+$resolvedNodeVersion = $resolvedNodeVersion.Trim()
 if ($resolvedNodeVersion -ne "v$NodeVersion") {
   throw "Bundled node.exe reports $resolvedNodeVersion, expected v$NodeVersion"
 }
@@ -67,6 +100,14 @@ Architecture: win-x64
 Source: $nodeUrl
 Node archive SHA256: $actual
 "@ | Set-Content -LiteralPath (Join-Path $runtimeDir 'NODE-RUNTIME.txt') -Encoding UTF8
+
+@{
+  version = $Version
+  sourceSha = [string]$sourceSha
+  workingTree = $(if ($sourceStatus) { 'dirty' } else { 'clean' })
+  sourceStatus = @($sourceStatus)
+  nodeVersion = $resolvedNodeVersion
+} | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $stageDir 'BUILD-INFO.json') -Encoding UTF8
 
 $items = @(
   'package.json',
@@ -83,6 +124,8 @@ $items = @(
   'regions.json',
   'public',
   'start-clash-node-pilot.cmd',
+  'start-pilot.ps1',
+  'windows-common.ps1',
   'install-pilot-autostart.ps1',
   'uninstall-pilot-autostart.ps1',
   'install-autostart.ps1',
@@ -110,7 +153,24 @@ $requiredRuntimeFiles = @(
   'src\core\controller.js',
   'src\core\optimizer.js',
   'src\core\security.js',
-  'src\core\state.js'
+  'src\core\state.js',
+  'src\core\diagnostics.js',
+  'src\core\capabilities.js',
+  'src\core\clock.js',
+  'src\core\decision.js',
+  'src\core\connectivity.js',
+  'src\core\jobs.js',
+  'src\core\regions.js',
+  'scripts\demo.js',
+  'scripts\benchmark.js',
+  'scripts\smoke-package.js',
+  'runtime\NODE-LICENSE',
+  'runtime\NODE-RUNTIME.txt',
+  'BUILD-INFO.json',
+  'start-pilot.ps1',
+  'windows-common.ps1',
+  'public\guide.html',
+  'docs\benchmarks.md'
 )
 foreach ($item in $requiredRuntimeFiles) {
   if (-not (Test-Path (Join-Path $stageDir $item))) { throw "Required runtime file missing from staging: $item" }
@@ -129,7 +189,7 @@ function Get-FreeTcpPort {
 function Test-PilotLaunch {
   param([string]$AppDir)
 
-  $smokeDir = Join-Path $buildDir ("smoke-" + [guid]::NewGuid().ToString('N'))
+  $smokeDir = Assert-BuildPath (Join-Path $buildDir ("smoke-" + [guid]::NewGuid().ToString('N')))
   New-Item -ItemType Directory -Path $smokeDir -Force | Out-Null
   $configPath = Join-Path $smokeDir 'config.yaml'
   Set-Content -LiteralPath $configPath -Value 'external-controller: 127.0.0.1:9' -Encoding UTF8
@@ -181,14 +241,15 @@ function Test-PilotLaunch {
       $process.Kill()
       $process.WaitForExit(5000) | Out-Null
     }
-    Remove-Item -LiteralPath $smokeDir -Recurse -Force -ErrorAction SilentlyContinue
+    $smokeDir = Assert-BuildPath $smokeDir
+    Remove-Item -LiteralPath $smokeDir -Recurse -Force
   }
 }
 
 $checkFiles = @(
   (Join-Path $stageDir 'server.js'),
   (Join-Path $stageDir 'public\app.js')
-) + (Get-ChildItem -LiteralPath (Join-Path $stageDir 'src') -Recurse -Filter *.js | ForEach-Object { $_.FullName })
+) + (Get-ChildItem -LiteralPath (Join-Path $stageDir 'src'), (Join-Path $stageDir 'scripts') -Recurse -Filter *.js | ForEach-Object { $_.FullName })
 foreach ($file in $checkFiles) {
   & $nodeExe --check $file
   if ($LASTEXITCODE -ne 0) { throw "Syntax check failed in staged file: $file" }
@@ -225,8 +286,8 @@ try {
   $zipStream.Dispose()
 }
 
-$extractDir = Join-Path $buildDir 'extract-smoke'
-Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+$extractDir = Assert-BuildPath (Join-Path $buildDir 'extract-smoke')
+if (Test-Path -LiteralPath $extractDir) { Remove-Item -LiteralPath $extractDir -Recurse -Force }
 Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force
 $extractedAppDir = Join-Path $extractDir $stageName
 if (-not (Test-Path $extractedAppDir)) { throw "Extracted release directory missing: $stageName" }

@@ -3,9 +3,10 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const assert = require('node:assert/strict');
 
 const HOST = '127.0.0.1';
-const DEFAULT_ZIP = path.join(__dirname, '..', 'outputs', 'clash-node-pilot-v0.1.0-windows-x64-portable.zip');
+const DEFAULT_ZIP = path.join(__dirname, '..', 'outputs', `clash-node-pilot-v${require('../package.json').version}-windows-x64-portable.zip`);
 
 function parseArgs(argv) {
   const options = { zip: DEFAULT_ZIP, keep: false };
@@ -37,28 +38,32 @@ function expandArchive(zipPath, destination) {
     '-ExecutionPolicy',
     'Bypass',
     '-Command',
-    `Expand-Archive -LiteralPath ${quote(zipPath)} -DestinationPath ${quote(destination)} -Force`
-  ], { stdio: 'pipe' });
+    `$ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath ${quote(zipPath)} -DestinationPath ${quote(destination)} -Force`
+  ], { stdio: 'pipe', windowsHide: true, timeout: 60000 });
 }
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function requestText(port, route) {
+async function requestText(port, route, { token, method = 'GET', body, expectedStatus = 200 } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request({
       hostname: HOST,
       port,
       path: route,
-      method: 'GET',
-      headers: { Host: `${HOST}:${port}` }
+      method,
+      headers: {
+        Host: `${HOST}:${port}`,
+        ...(token ? { 'x-pilot-session': token } : {}),
+        ...(body !== undefined ? { 'Content-Type': 'application/json' } : {})
+      }
     }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => {
         const body = Buffer.concat(chunks).toString('utf8');
-        if (res.statusCode !== 200) {
+        if (res.statusCode !== expectedStatus) {
           reject(new Error(`${route} returned HTTP ${res.statusCode}: ${body}`));
           return;
         }
@@ -66,8 +71,98 @@ function requestText(port, route) {
       });
     });
     req.on('error', reject);
-    req.end();
+    req.setTimeout(15000, () => req.destroy(new Error(`Timed out requesting ${route}`)));
+    req.end(body === undefined ? undefined : JSON.stringify(body));
   });
+}
+
+async function verifyDemo(port, version) {
+  const json = async (route, options) => JSON.parse(await requestText(port, route, options));
+  const health = await json('/api/health');
+  assert.equal(health.ok, true);
+  assert.equal(Number(health.port), port);
+  assert.equal(health.version, version);
+  for (const route of ['/api/status', '/api/diagnostics']) {
+    assert.equal((await json(route, { expectedStatus: 403 })).code, 'invalid-session');
+  }
+  const { token } = await json('/api/session');
+  assert.match(token, /^[a-f0-9]{64}$/);
+  const get = route => json(route, { token });
+  const post = (route, body) => json(route, { token, method: 'POST', body });
+  const initial = await get('/api/status');
+  assert.equal(initial.backend?.id, 'demo');
+  assert.equal(initial.demo?.enabled, true);
+  assert.equal(initial.startup?.supported, false);
+
+  await post('/api/demo-scenario', { scenario: 'healthy' });
+  const manual = await post('/api/optimize', { group: 'Proxy Select', region: 'us', switch: true });
+  assert.equal(manual.switched, true);
+  assert.equal(manual.active, 'US 01');
+  assert.equal(manual.commit?.writeResult, 'verified');
+  assert.equal(manual.commit?.verified, true);
+  const selected = await get('/api/status');
+  assert.equal(selected.groups.find(group => group.name === 'Proxy Select')?.now, manual.active);
+  await post('/api/automation', { action: 'unlock' });
+  await post('/api/auto-optimize', { force: true });
+  const measured = await get('/api/status');
+  assert.ok(measured.automation.history.length > 0);
+  assert.ok(measured.automation.trackedNodes > 0);
+
+  const diagnostics = await get('/api/diagnostics');
+  assert.equal(diagnostics.schemaVersion, 1);
+  assert.equal(diagnostics.identifierScheme, 'report-local-index');
+  assert.equal(diagnostics.app?.version, version);
+  assert.ok(diagnostics.history.length > 0);
+  assert.match(diagnostics.privacy, /review before sharing/i);
+  const diagnosticText = JSON.stringify(diagnostics);
+  for (const identifier of ['Proxy Select', 'Japan 01', 'US 01', 'external-controller']) {
+    assert.ok(!diagnosticText.includes(identifier), `Diagnostic leaked ${identifier}`);
+  }
+
+  await post('/api/automation', { action: 'lock' });
+  await post('/api/automation', { action: 'monitor', value: true });
+  const locked = await get('/api/status');
+  assert.ok(locked.automation.lockMs > 0);
+  assert.equal(locked.automation.monitorOnly, true);
+  const reset = await post('/api/demo-scenario', { scenario: 'target-outage' });
+  assert.equal(reset.scenario, 'target-outage');
+  const clean = await get('/api/status');
+  assert.deepEqual(clean.automation.history, []);
+  assert.equal(clean.automation.lastResults, null);
+  assert.equal(clean.automation.trackedNodes, 0);
+  assert.equal(clean.automation.lockMs, 0);
+  assert.equal(clean.automation.monitorOnly, false);
+  assert.equal(clean.automation.nextRunAt, null);
+  assert.equal(clean.automation.nextConnectivityCheckAt, null);
+  assert.equal(clean.groups.find(group => group.name === 'Proxy Select')?.now, 'Japan 01');
+  const cleanDiagnostics = await get('/api/diagnostics');
+  assert.equal(cleanDiagnostics.automation.activeLocks, 0);
+  return { authenticated: true, writeResult: manual.commit.writeResult, diagnosticsSchema: diagnostics.schemaVersion, resetScenario: reset.scenario };
+}
+
+function verifyBenchmark(report) {
+  assert.equal(report.schemaVersion, 2);
+  assert.equal(report.ticks, 12);
+  assert.equal(report.stepSeconds, 30);
+  assert.equal(report.results.length, 3);
+  const rows = new Map(report.results.map(row => [row.policy, row]));
+  for (const policy of ['pilot-http', 'fixed-initial', 'naive-lowest-latency']) {
+    const row = rows.get(policy);
+    assert.ok(row, `Missing benchmark policy: ${policy}`);
+    assert.equal(row.name, 'threshold-noise');
+    assert.equal(row.observations.length, report.ticks);
+    assert.equal(row.recoverySteps, 0);
+    assert.equal(row.unavailableAfterActionSteps, 0);
+    assert.equal(row.harmfulSwitches, 0);
+    assert.ok(Number.isFinite(row.meanSelectedLatencyMs));
+  }
+  const pilot = rows.get('pilot-http');
+  assert.equal(pilot.switches, 0);
+  assert.ok(pilot.reasonCodes.includes('below-threshold'));
+  assert.equal(rows.get('fixed-initial').probeCount, 0);
+  assert.equal(rows.get('naive-lowest-latency').probeCount, 3 * report.ticks);
+  assert.ok(pilot.probeCount > rows.get('naive-lowest-latency').probeCount);
+  return pilot;
 }
 
 async function waitForPort(process, getOutput) {
@@ -107,9 +202,17 @@ async function smoke(options) {
     const nodeExe = path.join(appDir, 'runtime', 'node.exe');
     const demoScript = path.join(appDir, 'scripts', 'demo.js');
     const benchmarkScript = path.join(appDir, 'scripts', 'benchmark.js');
-    for (const required of [nodeExe, demoScript, benchmarkScript, path.join(appDir, 'public', 'index.html'), path.join(appDir, 'docs', 'benchmarks.md')]) {
+    for (const required of [nodeExe, demoScript, benchmarkScript,
+      ...['package.json', 'BUILD-INFO.json', 'start-pilot.ps1', 'windows-common.ps1',
+        'runtime/NODE-LICENSE', 'runtime/NODE-RUNTIME.txt', 'src/core/diagnostics.js',
+        'public/index.html', 'public/guide.html', 'docs/benchmarks.md'].map(file => path.join(appDir, file))]) {
       if (!fs.existsSync(required)) throw new Error(`Required extracted file missing: ${required}`);
     }
+    const packageVersion = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8')).version;
+    const buildInfo = JSON.parse(fs.readFileSync(path.join(appDir, 'BUILD-INFO.json'), 'utf8').replace(/^\uFEFF/, ''));
+    assert.equal(buildInfo.version, packageVersion);
+    assert.match(buildInfo.sourceSha, /^[a-f0-9]{40}$/);
+    assert.ok(['clean', 'dirty'].includes(buildInfo.workingTree));
 
     let output = '';
     demo = spawn(nodeExe, [demoScript, '--no-auto'], {
@@ -121,21 +224,28 @@ async function smoke(options) {
     demo.stderr.on('data', (chunk) => { output += chunk.toString('utf8'); });
     const port = await waitForPort(demo, () => output);
 
-    const health = JSON.parse(await requestText(port, '/api/health'));
-    if (health.ok !== true || Number(health.port) !== port) throw new Error('Health response mismatch');
-    const status = JSON.parse(await requestText(port, '/api/status'));
-    if (status.backend?.id !== 'demo' || status.demo?.enabled !== true) throw new Error('Demo status mismatch');
+    const api = await verifyDemo(port, packageVersion);
+    const stateDirectory = output.match(/Demo state directory: ([^\r\n]+)/)?.[1];
+    if (!stateDirectory) throw new Error('Demo did not report its isolated state directory');
+    const resetState = JSON.parse(fs.readFileSync(path.join(stateDirectory, 'state.json'), 'utf8'));
+    for (const field of ['health', 'locks', 'lastAuto', 'lastSwitch']) {
+      assert.deepEqual(resetState[field], {}, `Demo reset retained ${field}`);
+    }
+    assert.deepEqual(resetState.history, []);
+    assert.equal(resetState.lastResults, null);
 
-    for (const route of ['/', '/styles.css', '/app.js', '/guide.html']) {
+    for (const route of ['/', '/styles.css', '/app.js', '/guide.html', '/guide.css']) {
       const content = await requestText(port, route);
       if (!content.trim()) throw new Error(`Static resource was empty: ${route}`);
     }
 
-    const benchmark = execFileSync(nodeExe, [benchmarkScript, '--scenario', 'threshold-noise', '--json'], { cwd: appDir, encoding: 'utf8' });
+    const benchmark = execFileSync(nodeExe, [benchmarkScript, '--scenario', 'threshold-noise', '--json'], {
+      cwd: appDir, encoding: 'utf8', timeout: 60000, windowsHide: true, maxBuffer: 4 * 1024 * 1024
+    });
     const report = JSON.parse(benchmark);
-    if (report.results?.[0]?.reasonCodes?.at(-1) !== 'below-threshold') throw new Error('Bundled benchmark result mismatch');
+    const pilot = verifyBenchmark(report);
 
-    return { appDir, port, benchmark: report.results[0] };
+    return { appDir, port, api, benchmark: pilot };
   } finally {
     if (demo && demo.exitCode === null) {
       demo.kill();
@@ -157,7 +267,8 @@ async function main() {
   console.log(`benchmark outcome: ${result.benchmark.reasonCodes.at(-1)}`);
 }
 
-main().catch((error) => {
+module.exports = { verifyDemo, verifyBenchmark, smoke };
+if (require.main === module) main().catch((error) => {
   console.error(error.stack || error.message);
   process.exitCode = 1;
 });

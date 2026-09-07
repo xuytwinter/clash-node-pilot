@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0] - Unreleased Candidate
+
+- Require a per-process local session token for API routes other than health and session bootstrap, including read-only APIs.
+- Add whitelist-based diagnostics with report-local anonymous indices; timestamps and statistics remain for review before sharing.
+- Reset demo history, health, results, locks and cooldown when changing scenes; reject changes during an active job with HTTP 409.
+- Make Windows watchdog checks independent of controller availability and stop managing Clash processes.
+- Unify PORT handling and quoted launch paths; remove duplicate PowerShell optimization scheduling.
+- Use package.json as the default release version, retain old ZIPs, record build SHA and worktree state, and stop release steps on native failures.
+- Document compatible-state migration, backup recovery, newer-schema read-only protection and rollback with matching saved state.
+- Replace ambiguous benchmark time and false-switch claims with simulated step metrics, explicit baselines and unequal probe budgets; see [methodology](docs/benchmarks.md).
+- Use Node.js 22.x as the documented CI-supported runtime.
+
+Validation uses isolated tests and mocks; real-machine upgrade success is not claimed.
+
 ## [0.1.0] - 2026-07-26
 
 Preview release for Windows 10/11 x64.

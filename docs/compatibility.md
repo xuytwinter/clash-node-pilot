@@ -1,45 +1,44 @@
 # Compatibility
 
-## Supported Release Target
+## 0.2.0 Candidate Target
 
-| Area | v0.1.0 scope |
+| Area | Supported scope |
 | --- | --- |
-| Operating system | Windows 10/11 x64 |
-| Package type | Portable zip |
-| Runtime | Bundled official Node.js 22.x Windows x64 |
-| UI | Local browser dashboard at `127.0.0.1` |
-| Source development | Node.js 18 or newer |
+| Operating system | Windows 10/11 x64 portable ZIP |
+| Runtime | Official Node.js 22.x Windows x64 bundled in the package |
+| Source and CI | Node.js 22.x |
+| UI | Local browser at `127.0.0.1`, port `3210` by default |
 
-No macOS, Linux, Android, iOS, browser extension, Electron shell, installer, or mobile package is shipped in v0.1.0.
+0.2.0 is a candidate awaiting publication. No macOS, Linux, mobile, browser-extension, Electron or installer package is included.
 
-## Proxy Client Support
+## Proxy Clients
 
-| Client | Support level | Notes |
+| Client | Support | Condition |
 | --- | --- | --- |
-| Clash Verge Rev | Writable Mihomo selector support | Reads local config and can detect the selected UI group when local storage is readable. |
-| Clash for Windows | Writable Mihomo selector support | Uses the local config file and Mihomo-compatible external controller. |
-| Other Clash/Mihomo clients | Custom config support | Set `CLASH_CONFIG` to a config containing `external-controller` and optional `secret`. |
-| v2rayN 7.x | Read-only detection | Shows detected current node information when available. v0.1.0 does not edit v2rayN data or restart Xray. |
+| Clash Verge Rev | Writable compatible selectors | Local config and external controller; UI group detection depends on readable local storage |
+| Clash for Windows | Writable compatible selectors | An enabled Mihomo-compatible local controller |
+| Other Clash/Mihomo clients | Custom configuration | Set `CLASH_CONFIG` with local `external-controller` and optional `secret` |
+| v2rayN 7.x | Read-only detection | No database edits or Xray restart |
 
-## Required Mihomo Controller Surface
+Compatibility depends on controller capabilities, not the client name alone. Required controller routes are `GET /version`, `GET /proxies`, `GET /proxies/:node/delay` and `PUT /proxies/:selector`. Selector PUT is followed by readback; success is reported only after confirmation. Remote controller addresses are rejected.
 
-The configured client must expose a local controller with these compatible endpoints:
+## Windows Launch
 
-- `GET /version`
-- `GET /proxies`
-- `GET /proxies/:node/delay?timeout=...&url=...`
-- `PUT /proxies/:selector`
+Launch scripts prefer `runtime\node.exe` and fall back to `node.exe` on PATH. Paths containing spaces, Chinese characters and single quotes are covered by isolated script tests. `PORT` or `-Port` sets the port consistently, including startup registration. Valid ports are 1 through 65535.
 
-The controller must be reachable from the local machine. Remote controller URLs are intentionally rejected.
+The watchdog checks Node Pilot's local health independently of controller connectivity. It neither restarts nor terminates Clash. Node owns automatic scheduling; legacy PowerShell loop scripts no longer run a second optimizer schedule.
 
-## Path and State Behavior
+## Upgrade and Rollback
 
-- The portable folder may contain spaces or Chinese characters.
-- Runtime state and logs live under `%LOCALAPPDATA%\ClashNodePilot` by default.
-- `CLASH_PILOT_STATE` has highest priority for custom state-file location.
-- On first v0.1.0 startup, legacy repository-local `data\state.json` is copied once when the new state file does not exist.
-- `npm run smoke:package` extracts the portable zip to a temporary path with spaces and Chinese characters and launches the bundled demo with the bundled runtime.
+1. Stop the existing Node Pilot instance.
+2. Back up `%LOCALAPPDATA%\ClashNodePilot\state.json` and `state.json.bak`, or the corresponding files at `CLASH_PILOT_STATE`.
+3. Extract the candidate into a separate folder and retain the old application and backup.
+4. Start with the intended state path and inspect persistence status. Reinstall startup entries from the new folder.
 
-## Network Probe Scope
+Default state is outside the application folder. Legacy repository-local `data\state.json` is copied once only when the destination does not exist. Supported older schemas are sanitized and migrated. Invalid input is preserved as `.invalid`; a valid `.bak` may restore state, otherwise defaults are used only when preservation allows safe writes. A newer unknown schema is preserved as `.future` when possible, with state writes and mutating operations disabled.
 
-Manual probe URLs are limited to trusted HTTPS endpoints. Connectivity heal uses fixed trusted targets to distinguish node failure from likely target or common probe failure. These probes do not create any product integration with the probed services.
+Rollback requires the older application paired with its matching pre-upgrade state copy, preferably at a separate `CLASH_PILOT_STATE` path. Do not overwrite newer state with an older application. Recovery fixtures and portable smoke tests are isolated evidence; a real-machine upgrade has not been established by those tests.
+
+## Probe Scope
+
+Manual tests rank one-time latency measurements. Automatic optimization adds historical health, repeated samples, thresholds and cooldown. Trusted HTTPS probes and fixed connectivity targets are not integrations with the services being probed. [Synthetic benchmarks](benchmarks.md) use unequal probe budgets and report simulated steps, not measured real-world outage duration.

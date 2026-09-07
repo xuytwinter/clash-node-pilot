@@ -29,7 +29,7 @@ npm run demo -- --no-auto
 | `regional-outage` | Japan demo nodes fail, allowing cross-region fallback behavior to be reviewed. |
 | `target-outage` | One fixed target fails across providers, so the dashboard should show an indeterminate or target-outage decision instead of switching blindly. |
 
-The dashboard includes a demo scenario selector when demo mode is active.
+The dashboard includes a demo scenario selector when demo mode is active. A successful change resets controller selections and clears runtime history, health, latest results, manual locks, previous automatic selections, cooldown and scheduling timestamps. Monitor-only resets to false; configured settings remain. Changing scenario while another job runs returns HTTP 409 and leaves the scenario unchanged.
 
 ## Isolation Guarantees
 
@@ -41,4 +41,10 @@ The demo launcher sets:
 - `CLASH_CONFIG` pointing at a generated temp config
 - `CLASH_PILOT_STATE` pointing at a generated temp state file
 
-The fake controller and temp directory are printed at startup and are discarded by the operating system later.
+The fake controller and temp directory are printed at startup. Stop with Ctrl+C; temporary files may remain until explicitly cleaned or removed by OS temp maintenance.
+
+The Node built-in loop is disabled for isolation. Unless `--no-auto` is passed, the demo launcher polls the authenticated automatic endpoint on its own timer; this does not enable Windows startup integrations. API clients first fetch `GET /api/session`, then include `x-pilot-session` on requests except health and session bootstrap.
+
+## Benchmark Interpretation
+
+See [Synthetic Policy Benchmarks](benchmarks.md) for repeatable traces, real HTTP policy execution and comparison baselines. Metrics use simulated steps and count probes; policies have unequal observation budgets. They do not measure internet recovery time or demonstrate production superiority.
