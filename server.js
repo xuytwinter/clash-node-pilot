@@ -101,7 +101,7 @@ function setPersistenceStatus(status) {
 }
 
 function ensureStateWritable() {
-  if (!runtime.persistence.writable) {
+  if (!runtime.persistence.writable && runtime.persistence.code !== 'state-save-failed') {
     throw stateError(runtime.persistence.message || 'Runtime state is read-only', 409, runtime.persistence.code || 'state-read-only');
   }
 }
@@ -216,7 +216,21 @@ function persistRuntimeState() {
   } catch (error) {
     if (temporary) fsSync.rmSync(temporary, { force: true });
     addDiagnostic('state-save-failed', 'Runtime state could not be saved');
+    setPersistenceStatus({ writable: false, code: 'state-save-failed', message: 'Runtime state could not be saved; retry after restoring storage access' });
     throw stateError('Runtime state could not be saved', 507, 'state-save-failed');
+  }
+}
+
+// Local settings mutations are synchronous, so rollback cannot overwrite another request.
+function saveLocalMutation(mutate) {
+  const keys = ['selectedBackend', 'monitorOnly', 'settings', 'locks', 'lastAuto', 'history', 'nextRunAt'];
+  const previous = Object.fromEntries(keys.map((key) => [key, structuredClone(runtime[key])]));
+  try {
+    mutate();
+    persistRuntimeState();
+  } catch (error) {
+    Object.assign(runtime, previous);
+    throw error;
   }
 }
 
@@ -1199,26 +1213,26 @@ async function apiHandler(req, res, url) {
       const available = await discoverBackends();
       const selected = available.find((item) => item.id === body.value && item.online);
       if (!selected) return sendJson(res, 400, { error: 'Selected backend is offline or unavailable' });
-      runtime.selectedBackend = selected.id;
-      persistRuntimeState();
+      saveLocalMutation(() => { runtime.selectedBackend = selected.id; });
       return sendJson(res, 200, { backend: safeBackend(selected) });
     }
     const { groups, backend } = await inventory();
     const group = await pickPrimaryGroup(groups, backend);
     if (!group) return sendJson(res, 404, { error: 'No active selector group' });
-    if (body.action === 'lock') lockGroup(backend, group.name);
-    if (body.action === 'unlock') { clearGroupLock(backend, group.name); clearLastAuto(backend, group.name); }
-    if (body.action === 'monitor') {
-      if (typeof body.value !== 'boolean') throw apiError('monitor value must be a boolean', 400, 'invalid-monitor');
-      runtime.monitorOnly = body.value;
-    }
-    if (body.action === 'clear-history') runtime.history = [];
-    if (body.action === 'settings') {
-      if (!body.settings || typeof body.settings !== 'object' || Array.isArray(body.settings)) throw apiError('settings must be an object', 400, 'invalid-settings');
-      updateSettings(body.settings);
-      runtime.nextRunAt = nextAutoRunIso();
-    }
-    persistRuntimeState();
+    saveLocalMutation(() => {
+      if (body.action === 'lock') lockGroup(backend, group.name);
+      if (body.action === 'unlock') { clearGroupLock(backend, group.name); clearLastAuto(backend, group.name); }
+      if (body.action === 'monitor') {
+        if (typeof body.value !== 'boolean') throw apiError('monitor value must be a boolean', 400, 'invalid-monitor');
+        runtime.monitorOnly = body.value;
+      }
+      if (body.action === 'clear-history') runtime.history = [];
+      if (body.action === 'settings') {
+        if (!body.settings || typeof body.settings !== 'object' || Array.isArray(body.settings)) throw apiError('settings must be an object', 400, 'invalid-settings');
+        updateSettings(body.settings);
+        runtime.nextRunAt = nextAutoRunIso();
+      }
+    });
     return sendJson(res, 200, { lockMs: lockRemainingFor(backend, group.name), monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings });
   }
   if (req.method === 'POST' && url.pathname === '/api/optimize') {

@@ -3,6 +3,7 @@ const state = {
   group: '',
   region: '',
   resultsSource: null,
+  displayedResults: null,
   operations: new Map(),
   operationSeq: 0,
   manualSeq: 0,
@@ -387,7 +388,7 @@ function endOperation(id) {
 }
 
 function stateWritable() {
-  return state.status?.persistence?.writable !== false;
+  return state.status?.persistence?.writable !== false || state.status?.persistence?.code === 'state-save-failed';
 }
 
 async function readResponse(response) {
@@ -641,13 +642,14 @@ function renderDecision(data) {
   if (event?.evidence?.best) {
     const best = event.evidence.best;
     const current = event.evidence.current;
-    rows.push([tr('decisionEvidence'), `${best.name}: ${best.scoreMs ?? '-'}${current ? ` · ${current.name}: ${current.scoreMs ?? '-'}` : ''}`]);
+    rows.push([tr('decisionEvidence'), `${best.name}: ${best.scoreMs ?? '-'}${current && current.name !== best.name ? ` · ${current.name}: ${current.scoreMs ?? '-'}` : ''}`]);
   }
   if (!rows.length) rows.push([tr('decisionReason'), decisionMessage(code)]);
   $('decisionDetails').innerHTML = rows.map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`).join('');
 }
 
 function renderResults(data, meta = {}) {
+  state.displayedResults = { data, meta };
   $('empty').style.display = 'none';
   $('results').className = 'results visible';
   renderDecision(data);
@@ -689,6 +691,10 @@ async function optimize() {
     group: state.group,
     region: state.region
   };
+  const sameContext = () => context.seq === state.manualSeq
+    && context.backend === (state.status?.backend?.id || '')
+    && context.group === state.group
+    && context.region === state.region;
   const button = $('optimizeButton');
   button.classList.add('loading');
   button.querySelector('span:last-child').textContent = tr('optimizeRunning');
@@ -705,11 +711,7 @@ async function optimize() {
       testUrl: $('testUrl').value,
       timeout: Number($('timeout').value)
     });
-    const sameContext = context.seq === state.manualSeq
-      && context.backend === (state.status?.backend?.id || '')
-      && context.group === state.group
-      && context.region === state.region;
-    if (!sameContext) {
+    if (!sameContext()) {
       setMessage(tr('oldManualResult'), '', 7000);
       return;
     }
@@ -720,6 +722,7 @@ async function optimize() {
     updateCurrent();
     setMessage(manualResultMessage(data), '', 6000);
   } catch (error) {
+    if (!sameContext()) return;
     if (error.data?.results) renderResults({ ...error.data, active: selectedGroup()?.now }, { source: 'manual' });
     setMessage(error.message, 'error', 8000);
   } finally {
@@ -742,12 +745,14 @@ $('langButton').addEventListener('click', () => {
     renderRegions();
     renderPersistedResults(state.status);
   }
+  if (state.displayedResults) renderResults(state.displayedResults.data, state.displayedResults.meta);
 });
 
 $('groupSelect').addEventListener('change', (event) => {
   state.group = event.target.value;
   state.region = '';
   state.resultsSource = null;
+  state.displayedResults = null;
   state.manualSeq += 1;
   $('results').className = 'results';
   $('empty').style.display = 'flex';
@@ -765,6 +770,7 @@ $('backendSelect').addEventListener('change', async (event) => {
     state.group = '';
     state.region = '';
     state.resultsSource = null;
+    state.displayedResults = null;
     setMessage(tr('backendChanged'), '', 4000);
     await loadStatus({ quiet: true });
   } catch (error) {
@@ -783,9 +789,11 @@ $('demoScenarioSelect').addEventListener('change', async (event) => {
     state.group = '';
     state.region = '';
     state.resultsSource = null;
+    state.displayedResults = null;
     $('results').className = 'results';
     $('empty').style.display = 'flex';
     $('decisionPanel').hidden = true;
+    $('resultCount').textContent = tr('noRun');
     setMessage(tr('scenarioChanged'), '', 4000);
     await loadStatus({ quiet: true });
   } catch (error) {

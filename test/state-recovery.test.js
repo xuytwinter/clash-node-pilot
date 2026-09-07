@@ -230,6 +230,18 @@ test('state save failure is returned to API callers', async () => {
     assert.equal(response.status, 507);
     assert.equal(response.body.code, 'state-save-failed');
     assert.equal(fs.existsSync(`${statePath}.tmp`), false);
+    const rejectedMonitor = await postJson(pilotPort, '/api/automation', { action: 'monitor', value: true });
+    assert.equal(rejectedMonitor.status, 507);
+    const afterFailure = await getJson(pilotPort, '/api/status');
+    assert.equal(afterFailure.body.automation.monitorOnly, false);
+    assert.equal(afterFailure.body.persistence.writable, false);
+    assert.equal(afterFailure.body.persistence.code, 'state-save-failed');
+    fs.rmdirSync(statePath);
+    const retry = await postJson(pilotPort, '/api/automation', { action: 'monitor', value: true });
+    assert.equal(retry.status, 200);
+    assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).monitorOnly, true);
+    const afterRetry = await getJson(pilotPort, '/api/status');
+    assert.equal(afterRetry.body.persistence.code, 'ok');
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await fake.close();
