@@ -75,9 +75,9 @@ test('state path honors CLASH_PILOT_STATE before LocalAppData default', () => {
   const base = path.join(sandbox, 'Local App Data');
   const explicit = path.join(sandbox, 'pilot', 'state.json');
   const env = { LOCALAPPDATA: base, CLASH_PILOT_STATE: explicit };
-  assert.equal(resolveStatePath(env), path.resolve(explicit));
-  assert.equal(resolveStatePath({ LOCALAPPDATA: base }), path.join(base, 'ClashNodePilot', 'state.json'));
-  assert.equal(resolvePilotDataDir({ LOCALAPPDATA: base }), path.join(base, 'ClashNodePilot'));
+  assert.equal(resolveStatePath(env, 'win32'), path.resolve(explicit));
+  assert.equal(resolveStatePath({ LOCALAPPDATA: base }, 'win32'), path.join(base, 'ClashNodePilot', 'state.json'));
+  assert.equal(resolvePilotDataDir({ LOCALAPPDATA: base }, 'win32'), path.join(base, 'ClashNodePilot'));
 });
 
 test('legacy repository state migrates once without deleting the old file', () => {

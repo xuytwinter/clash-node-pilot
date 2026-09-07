@@ -6,6 +6,7 @@ const os = require('node:os');
 const { createDiagnosticsReport } = require('./src/core/diagnostics');
 const { execFileSync } = require('node:child_process');
 const { ControllerClient, parseConfig: parseControllerConfig, probeConfigBackend, safeBackend } = require('./src/core/controller');
+const platformPaths = require('./src/platform/paths');
 const { createRegionResolver, loadRegions, summarizeRegions: summarizeRegionCounts } = require('./src/core/regions');
 const { JobCoordinator } = require('./src/core/jobs');
 const { normalizeProbeUrl, requireJsonContentType, securityHeaders, validateLocalApiRequest, createLocalSession } = require('./src/core/security');
@@ -20,23 +21,8 @@ const PORT = Number(process.env.PORT || 3210);
 const DEMO_MODE = process.env.CLASH_PILOT_DEMO === '1';
 const OS_INTEGRATION_DISABLED = DEMO_MODE || process.env.CLASH_PILOT_DISABLE_OS_INTEGRATION === '1';
 const STATIC_ROOT = path.join(__dirname, 'public');
-const VERGE_CONFIG_PATH = path.join(
-  process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
-  'io.github.clash-verge-rev.clash-verge-rev',
-  'config.yaml'
-);
-const CFW_CONFIG_PATH = path.join(os.homedir(), '.config', 'clash', 'config.yaml');
-const MIHOMO_BACKENDS = [
-  ...(process.env.CLASH_CONFIG ? [{ id: DEMO_MODE ? 'demo' : 'custom', name: DEMO_MODE ? 'Demo Fake Mihomo' : 'Custom Clash/Mihomo', configPath: process.env.CLASH_CONFIG }] : []),
-  ...(!DEMO_MODE ? [
-    { id: 'clash-verge', name: 'Clash Verge Rev', configPath: VERGE_CONFIG_PATH },
-    { id: 'clash-for-windows', name: 'Clash for Windows', configPath: CFW_CONFIG_PATH }
-  ] : [])
-];
-const WEBVIEW_LEVELDB = path.join(
-  process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-  'io.github.clash-verge-rev.clash-verge-rev', 'EBWebView', 'Default', 'Local Storage', 'leveldb'
-);
+const MIHOMO_BACKENDS = platformPaths.configBackends({ env: process.env, platform: process.platform, demoMode: DEMO_MODE });
+const WEBVIEW_LEVELDB = platformPaths.clashVergeLevelDbPath(process.env, process.platform);
 const DEFAULT_TEST_URL = 'https://www.gstatic.com/generate_204';
 const VERIFY_TEST_URL = 'https://cp.cloudflare.com/generate_204';
 const CONNECTIVITY_TEST_URLS = connectivityCore.DEFAULT_CONNECTIVITY_TARGETS;
@@ -47,11 +33,11 @@ const HEALTH_HALF_LIFE_MINUTES = Number(process.env.HEALTH_HALF_LIFE_MINUTES || 
 const MANUAL_PAUSE_MS = Number(process.env.MANUAL_PAUSE_MINUTES || 15) * 60 * 1000;
 const DEFAULT_JOB_BUDGET_MS = 120000;
 const LEGACY_STATE_PATH = path.join(__dirname, 'data', 'state.json');
-function resolvePilotDataDir(env = process.env) {
-  return path.join(env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'ClashNodePilot');
+function resolvePilotDataDir(env = process.env, platform = process.platform) {
+  return platformPaths.resolvePilotDataDir(env, platform);
 }
-function resolveStatePath(env = process.env) {
-  return env.CLASH_PILOT_STATE ? path.resolve(env.CLASH_PILOT_STATE) : path.join(resolvePilotDataDir(env), 'state.json');
+function resolveStatePath(env = process.env, platform = process.platform) {
+  return platformPaths.resolveStatePath(env, platform);
 }
 function migrateLegacyState(statePath = resolveStatePath(), legacyPath = LEGACY_STATE_PATH, env = process.env) {
   if (env.CLASH_PILOT_STATE || fsSync.existsSync(statePath) || !fsSync.existsSync(legacyPath)) return false;
@@ -264,8 +250,8 @@ async function discoverBackends() {
 
 function discoverV2rayNHome() {
   if (OS_INTEGRATION_DISABLED) return null;
-  if (process.env.V2RAYN_HOME && fsSync.existsSync(path.join(process.env.V2RAYN_HOME, 'v2rayN.exe'))) return process.env.V2RAYN_HOME;
   if (process.platform !== 'win32') return null;
+  if (process.env.V2RAYN_HOME && fsSync.existsSync(path.join(process.env.V2RAYN_HOME, 'v2rayN.exe'))) return process.env.V2RAYN_HOME;
   try {
     const executable = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(Get-Process v2rayN -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path)'], { encoding: 'utf8', timeout: 2000, windowsHide: true }).trim();
     return executable ? path.dirname(executable) : null;
@@ -351,6 +337,7 @@ async function inventory() {
 }
 
 async function selectedUiGroup(groups) {
+  if (!WEBVIEW_LEVELDB) return null;
   try {
     const files = (await fs.readdir(WEBVIEW_LEVELDB, { withFileTypes: true }))
       .filter((entry) => entry.isFile() && (entry.name.endsWith('.log') || entry.name.endsWith('.ldb')));

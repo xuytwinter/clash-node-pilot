@@ -14,6 +14,8 @@ The branch must not be merged wholesale. Its older server predates the current s
 
 ## Implementation Sequence
 
+Platform foundation is implemented on the macOS preview branch: macOS state uses `~/Library/Application Support/ClashNodePilot`, explicit state/config overrides remain supported, configuration discovery uses macOS candidates, and Windows WebView/v2rayN process discovery is excluded on macOS. These candidates are not verified client-version support claims. The native launcher and DMG build remain unimplemented; no macOS download is published.
+
 | Files | Reuse and required work |
 | --- | --- |
 | `release-macos.sh` | Reuse official Node archive downloads, SHA256 verification and license inclusion. Generate an `.app` containing the matching runtime, then a DMG on macOS. Record runtime version, architecture and source commit; validate executable permissions and deployment target. |
