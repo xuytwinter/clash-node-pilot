@@ -18,6 +18,8 @@ $appProcess = $null
 $installed = $false
 $junctionPresent = $false
 $report = $null
+$phase = 'initialize'
+$originalFailure = $null
 $checks = New-Object System.Collections.Generic.List[string]
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{6E17E88E-073F-4827-9377-49523373F319}_is1'
 $launchLink = Join-Path ([Environment]::GetFolderPath('Programs')) 'Clash Node Pilot.lnk'
@@ -73,18 +75,38 @@ function Read-IntegrationSnapshot {
 }
 
 function Assert-Shortcut([string]$LinkPath, [string]$Target, [string]$Arguments) {
+  $script:phase = "shortcut:$(Split-Path -Leaf $LinkPath)"
   Assert-Check (Test-Path -LiteralPath $LinkPath -PathType Leaf) "Installer created $(Split-Path -Leaf $LinkPath)."
   $shell = New-Object -ComObject WScript.Shell
   $link = $null
   try {
     $link = $shell.CreateShortcut($LinkPath)
-    Assert-Check ((Get-LongExistingPath $link.TargetPath) -ieq (Get-LongExistingPath $Target)) "Shortcut $(Split-Path -Leaf $LinkPath) targets the installed application."
+    $context = @{ link = $LinkPath; target = $link.TargetPath; workingDirectory = $link.WorkingDirectory; arguments = $link.Arguments } | ConvertTo-Json -Compress
+    try {
+      $actualTarget = Get-LongExistingPath (ConvertFrom-ShortcutPath $link.TargetPath)
+      $actualWorkingDirectory = Get-LongExistingPath (ConvertFrom-ShortcutPath $link.WorkingDirectory)
+    } catch {
+      throw "Shortcut path parsing failed: $context. $($_.Exception.Message)"
+    }
+    Assert-Check ($actualTarget -ieq (Get-LongExistingPath $Target)) "Shortcut $(Split-Path -Leaf $LinkPath) targets the installed application."
     Assert-Check ($link.Arguments -ceq $Arguments) "Shortcut $(Split-Path -Leaf $LinkPath) has the expected arguments."
-    Assert-Check ((Get-LongExistingPath $link.WorkingDirectory) -ieq $app) "Shortcut $(Split-Path -Leaf $LinkPath) uses its installation directory."
+    Assert-Check ($actualWorkingDirectory -ieq $app) "Shortcut $(Split-Path -Leaf $LinkPath) uses its installation directory."
   } finally {
     if ($link) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) }
     [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
   }
+}
+
+function ConvertFrom-ShortcutPath([string]$Value) {
+  # IShellLink fields can preserve a single surrounding quote pair, unlike filesystem paths.
+  if ($Value.Length -ge 2 -and $Value[0] -eq [char]34 -and $Value[$Value.Length - 1] -eq [char]34) {
+    $Value = $Value.Substring(1, $Value.Length - 2)
+  }
+  if ([string]::IsNullOrWhiteSpace($Value) -or $Value.Contains([string][char]34) -or $Value.Contains([string][char]0)) {
+    throw 'Shortcut path is empty or contains malformed quoting or a null character.'
+  }
+  if (-not [IO.Path]::IsPathRooted($Value)) { throw 'Shortcut path must be absolute.' }
+  return $Value
 }
 
 function Read-StartupSnapshot {
@@ -134,6 +156,7 @@ try {
   Assert-Check (-not (Test-Path -LiteralPath (Join-Path $unowned 'server.js'))) 'Rejected installation wrote no application payload.'
   $installArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$app`"")
   if (-not $VerifyIntegration) { $installArgs += '/NOINTEGRATION=1' }
+  $phase = 'install'
   $code = Invoke-Installer $setup ($installArgs + "/LOG=`"$(Join-Path $root 'install.log')`"")
   Assert-Check ($code -eq 0) 'Isolated real installer completed in a Chinese and spaced directory.'
   $installed = $true
@@ -156,6 +179,7 @@ try {
   $portableState = Join-Path $app 'data\state.json'
   New-Item -ItemType Directory -Path (Split-Path -Parent $portableState) -Force | Out-Null
   [IO.File]::WriteAllText($portableState, $stateBytes)
+  $phase = 'reinstall'
   $code = Invoke-Installer $setup ($installArgs + "/LOG=`"$(Join-Path $root 'reinstall.log')`"")
   Assert-Check ($code -eq 0) 'Same-version installation over an existing installation completed.'
   if ($VerifyIntegration) {
@@ -177,6 +201,7 @@ try {
   $outsideMarker = Join-Path $outside 'sentinel.txt'
   [IO.File]::WriteAllText($outsideMarker, 'outside content must remain unchanged')
   Move-Item -LiteralPath $publicPath -Destination $publicBackup
+  $phase = 'junction-upgrade'
   try {
     New-Item -ItemType Junction -Path $publicPath -Target $outside | Out-Null
     $junctionPresent = $true
@@ -197,6 +222,7 @@ try {
   }
 
   $runner = Join-Path $root 'owned-running-process.js'
+  $phase = 'running-upgrade'
   [IO.File]::WriteAllText($runner, 'setInterval(() => {}, 1000);')
   $ownedProcess = Start-Process -FilePath $node -ArgumentList "`"$runner`"" -WindowStyle Hidden -PassThru
   Start-Sleep -Milliseconds 300
@@ -207,6 +233,7 @@ try {
   Assert-Check (-not $ownedProcess.HasExited) 'Installer did not kill the active runtime.'
 
   $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 0)
+  $phase = 'installed-server'
   $listener.Start()
   $port = $listener.LocalEndpoint.Port
   $listener.Stop()
@@ -256,6 +283,7 @@ try {
   $ownedProcess.WaitForExit()
   $ownedProcess = $null
 
+  $phase = 'uninstall'
   $code = Invoke-Installer (Join-Path $app 'unins000.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$(Join-Path $root 'uninstall.log')`"")
   Assert-Check ($code -eq 0) 'Isolated real uninstaller completed.'
   $installed = $false
@@ -277,7 +305,12 @@ try {
     checks = $checks.ToArray(); limitations = @($(if (-not $VerifyIntegration) { 'Default registry and shortcut integration not exercised.' } else { 'Runner integration was checked without launching shortcut targets or a browser.' }), 'Reinstall uses the same build; migration from an older released installer is not established.', 'Only owned isolated application and dummy processes were started or stopped; no existing user process was modified.')
     retainedPath = $(if ($Keep) { $root } else { $null })
   }
+} catch {
+  $originalFailure = $_
+  Write-Warning "Installer verification failed in phase ${phase}: $($_.Exception.Message)`n$($_.ScriptStackTrace)"
+  throw
 } finally {
+  try {
   if ($appProcess -and -not $appProcess.HasExited) { Stop-Process -Id $appProcess.Id -Force; $appProcess.WaitForExit() }
   if ($ownedProcess -and -not $ownedProcess.HasExited) { Stop-Process -Id $ownedProcess.Id -Force; $ownedProcess.WaitForExit() }
   if ($installed -and -not $junctionPresent -and (Test-Path -LiteralPath (Join-Path $app 'unins000.exe'))) {
@@ -297,6 +330,11 @@ try {
         Start-Sleep -Milliseconds 250
       }
     }
+  }
+  } catch {
+    if ($originalFailure) {
+      Write-Warning "Cleanup also failed; original verification error remains primary: $($_.Exception.Message)`n$($_.ScriptStackTrace)"
+    } else { throw }
   }
 }
 if ($report) { $report | ConvertTo-Json -Depth 5 }
