@@ -11,7 +11,7 @@ const version = require('../package.json').version;
 const setup = process.env.CLASH_PILOT_TEST_INSTALLER || path.join(root, 'outputs', `clash-node-pilot-v${version}-windows-x64-setup.exe`);
 
 test('IShellLinkW round-trips Chinese target, arguments and working directory without ANSI loss', { skip: process.platform !== 'win32' }, () => {
-  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'pilot-unicode-link-'));
+  const fixture = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'pilot-unicode-link-')));
   const command = `
     $ErrorActionPreference = 'Stop'
     $tokens=$null; $errors=$null
@@ -28,7 +28,9 @@ test('IShellLinkW round-trips Chinese target, arguments and working directory wi
     $arguments='--label '+$label
     [PilotUnicodeShortcut]::WriteTestFixture($file,$target,$directory,$arguments)
     $actual=[PilotUnicodeShortcut]::Read($file)
-    if ($actual.TargetPath -cne $target -or $actual.WorkingDirectory -cne $directory -or $actual.Arguments -cne $arguments) { throw 'IShellLinkW Unicode roundtrip failed' }
+    if ($actual.TargetPath -cne $target) { throw "IShellLinkW target mismatch: $($actual.TargetPath) vs $target" }
+    if ($actual.WorkingDirectory -cne $directory) { throw "IShellLinkW working directory mismatch: $($actual.WorkingDirectory) vs $directory" }
+    if ($actual.Arguments -cne $arguments) { throw "IShellLinkW arguments mismatch: $($actual.Arguments) vs $arguments" }
     if ($actual.TargetPath.Contains('?')) { throw 'Unicode target contains a literal question mark' }
   `;
   try {
