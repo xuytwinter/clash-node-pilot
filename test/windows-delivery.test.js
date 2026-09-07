@@ -9,7 +9,8 @@ const windows = process.platform === 'win32';
 const quote = value => "'" + value.replaceAll("'", "''") + "'";
 
 function fixture(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pilot spaces ' \u4e2d\u6587 "));
+  // PowerShell expands Windows short paths, including CI's RUNNER~1 temp root.
+  const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pilot spaces ' \u4e2d\u6587 ")));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   for (const name of fs.readdirSync(root).filter(name => name.endsWith('.ps1'))) {
     fs.copyFileSync(path.join(root, name), path.join(dir, name));
