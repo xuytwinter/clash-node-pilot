@@ -18,6 +18,8 @@ Evidence: [v0.2.0 release](https://github.com/xuytwinter/clash-node-pilot/releas
 
 ### In Progress: Windows Installer
 
+Implementation and acceptance details: [Windows installer](windows-installer.md).
+
 - [ ] Build a per-user `Setup.exe` from the verified portable payload using Inno Setup.
 - [ ] Provide Start Menu and optional desktop shortcuts, with no implicit autostart.
 - [ ] Keep user state during upgrade and uninstall; handle running instances explicitly.
@@ -27,6 +29,8 @@ Evidence: [v0.2.0 release](https://github.com/xuytwinter/clash-node-pilot/releas
 The installed application retains the local-browser UI. A standalone desktop window is a separate milestone. Initial builds may be unsigned; distribution must state signing status accurately.
 
 ### Next: macOS Preview
+
+Audited reuse plan and platform gates: [macOS delivery](macos-delivery.md).
 
 - [ ] Review reusable macOS work against the current controller and session APIs.
 - [ ] Adapt configuration discovery, application state paths and process lifecycle.

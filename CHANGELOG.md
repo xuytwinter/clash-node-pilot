@@ -1,6 +1,11 @@
 # Changelog
 
-## [0.2.0] - Unreleased Candidate
+## [0.3.0] - Unreleased
+
+- Add a public bilingual delivery roadmap linked from both READMEs.
+- Prepare a per-user Windows installer alongside the portable ZIP, with explicit installation acceptance gates.
+
+## [0.2.0] - 2026-09-07
 
 - Require a per-process local session token for API routes other than health and session bootstrap, including read-only APIs.
 - Add whitelist-based diagnostics with report-local anonymous indices; timestamps and statistics remain for review before sharing.

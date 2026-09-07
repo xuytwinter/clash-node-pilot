@@ -136,12 +136,23 @@ jobs:
             }
           }
 
+      - name: Build and verify Windows installer
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -ExpectedSourceSha '${{ github.sha }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Windows installer build failed' }
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 -SetupPath "outputs/clash-node-pilot-v$version-windows-x64-setup.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows installer acceptance failed' }
+
       - uses: actions/upload-artifact@v4
         with:
           name: clash-node-pilot-release-assets
           path: |
             outputs/*.zip
             outputs/*.sha256
+            outputs/*-setup.exe
+            outputs/*-setup.exe.build.json
 
       - name: Publish GitHub Release
         env:
@@ -152,6 +163,9 @@ jobs:
           gh release create '${{ github.ref_name }}' `
             "outputs\clash-node-pilot-v$version-windows-x64-portable.zip" `
             "outputs\clash-node-pilot-v$version-windows-x64-portable.zip.sha256" `
+            "outputs\clash-node-pilot-v$version-windows-x64-setup.exe" `
+            "outputs\clash-node-pilot-v$version-windows-x64-setup.exe.sha256" `
+            "outputs\clash-node-pilot-v$version-windows-x64-setup.exe.build.json" `
             --title "Clash Node Pilot v$version Preview" `
             --notes-file RELEASE_NOTES.md `
             --latest

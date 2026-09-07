@@ -1,0 +1,54 @@
+name: Windows Installer Acceptance
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packaging/windows/**'
+      - 'scripts/*installer*'
+      - 'release.ps1'
+      - '.github/workflows/installer.yml'
+      - 'package.json'
+  push:
+    branches: [main, 'codex/windows-installer-delivery']
+    paths:
+      - 'packaging/windows/**'
+      - 'scripts/*installer*'
+      - 'release.ps1'
+      - '.github/workflows/installer.yml'
+      - 'package.json'
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      - name: Build portable payload and installer
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File release.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Portable build failed' }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1 -ExpectedSourceSha '${{ github.sha }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+      - name: Verify real installer lifecycle in isolation
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 -SetupPath "outputs/clash-node-pilot-v$version-windows-x64-setup.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Installer lifecycle failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-candidate
+          path: |
+            outputs/*-setup.exe
+            outputs/*-setup.exe.sha256
+            outputs/*-setup.exe.build.json

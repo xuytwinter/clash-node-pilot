@@ -19,6 +19,8 @@ No macOS, Linux, Android, iOS, Electron, browser extension, or ChatGPT/OpenAI in
 
 ## Quick Start
 
+Windows `Setup.exe` work for 0.3.0 is documented in the [installer guide](docs/windows-installer.md). The published 0.2.0 download remains a portable ZIP until the next release passes acceptance.
+
 1. Obtain `clash-node-pilot-v0.2.0-windows-x64-portable.zip` and its checksum from [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases). Only tagged releases provide published assets.
 2. Extract it to any local folder, including paths with spaces or Chinese characters.
 3. Double-click `start-clash-node-pilot.cmd`.

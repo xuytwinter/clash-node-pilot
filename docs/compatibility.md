@@ -1,6 +1,6 @@
 # Compatibility
 
-## 0.2.0 Candidate Target
+## Published 0.2.0
 
 | Area | Supported scope |
 | --- | --- |
@@ -9,7 +9,7 @@
 | Source and CI | Node.js 22.x |
 | UI | Local browser at `127.0.0.1`, port `3210` by default |
 
-0.2.0 is a candidate awaiting publication. No macOS, Linux, mobile, browser-extension, Electron or installer package is included.
+0.2.0 is published. No macOS, Linux, mobile, browser-extension, Electron or installer package is included in that release. Windows installer work for 0.3.0 is tracked in the [delivery roadmap](ROADMAP.md).
 
 ## Proxy Clients
 

@@ -19,6 +19,8 @@ v0.2.0 不包含 macOS、Linux、Android、iOS、Electron、浏览器扩展或 C
 
 ## 快速开始
 
+0.3.0 的 Windows `Setup.exe` 正在验收，详见[安装程序说明](docs/windows-installer.md)。下一版通过验收前，已发布的 0.2.0 下载仍为便携 ZIP。
+
 1. 从 [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases) 获取 `clash-node-pilot-v0.2.0-windows-x64-portable.zip` 及校验文件。发布产物以已打标签的 Release 为准。
 2. 解压到任意本地目录，支持空格和中文路径。
 3. 双击 `start-clash-node-pilot.cmd`。
