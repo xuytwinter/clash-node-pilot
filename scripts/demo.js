@@ -152,6 +152,7 @@ async function main() {
   process.env.CLASH_PILOT_DEMO = '1';
   process.env.CLASH_PILOT_DISABLE_OS_INTEGRATION = '1';
   process.env.CLASH_PILOT_DISABLE_AUTO_LOOP = '1';
+  process.env.CLASH_PILOT_DEMO_AUTO = options.auto ? '1' : '0';
   delete process.env.V2RAYN_HOME;
 
   const { server } = require('../server');
@@ -164,10 +165,11 @@ async function main() {
   console.log('Press Ctrl+C to stop.');
 
   if (!options.auto) return;
+  const { token } = await (await fetch(`http://${HOST}:${boundPilotPort}/api/session`)).json();
   const runScheduledCheck = () => {
     fetch(`http://${HOST}:${boundPilotPort}/api/auto-optimize`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-pilot-session': token },
       body: '{}'
     }).catch(() => {});
   };

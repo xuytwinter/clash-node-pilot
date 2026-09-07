@@ -21,6 +21,7 @@ const text = {
     startup: 'Startup',
     startupOn: 'Startup On',
     startupTask: 'Startup On (Task)',
+    diagnostics: 'Diagnostics',
     docs: 'Docs',
     connecting: 'Connecting',
     currentExit: 'Current Exit',
@@ -100,12 +101,12 @@ const text = {
     optimizeRunning: 'Testing nodes in parallel...',
     optimizeStart: 'Keep Mihomo running while measurements complete. This job can be cancelled before commit.',
     oldManualResult: 'A measurement finished for a previous group or backend. Current view was kept unchanged.',
-    manualMonitor: 'Monitor-only mode is enabled; recommended node score {score}, no selector write.',
+    manualMonitor: 'Monitor-only: best measured latency {score} ms, no selector write.',
     manualExternal: 'External selector change was detected during measurement; current choice was preserved.',
-    manualDisabled: 'Best node score {score}; switching was disabled.',
+    manualDisabled: 'Best measured latency {score} ms; switching was disabled.',
     manualWriteMiss: 'Controller accepted the write but readback did not confirm the selector change.',
-    manualSwitched: 'Switched to the best node, score {score}.',
-    manualHeld: 'Best node score {score}; current node was kept.',
+    manualSwitched: 'Switched to the fastest measured node, {score} ms.',
+    manualHeld: 'Best measured latency {score} ms; current node was kept.',
     buttonReady: 'Test and Select',
     backendChanged: 'Proxy client changed.',
     startupEnabled: 'Startup enabled.',
@@ -118,6 +119,7 @@ const text = {
     lockDisabled: 'Manual protection cleared.',
     settingsSaved: 'Optimization settings saved.',
     scenarioChanged: 'Demo scenario changed.',
+    diagnosticsDownloaded: 'Diagnostics report downloaded.',
     decisionAction: 'Action',
     decisionReason: 'Reason',
     decisionTarget: 'Target',
@@ -159,6 +161,7 @@ const text = {
     startup: '开机启动',
     startupOn: '开机启动已开启',
     startupTask: '开机启动已开启（任务计划）',
+    diagnostics: '诊断报告',
     docs: '文档',
     connecting: '正在连接',
     currentExit: '当前出口',
@@ -238,12 +241,12 @@ const text = {
     optimizeRunning: '正在并发测速...',
     optimizeStart: '测速期间请保持 Mihomo 运行，提交切换前可取消。',
     oldManualResult: '上一组或上一后端的测速已完成，当前视图已保持不变。',
-    manualMonitor: '仅监控已启用，推荐节点评分 {score}，未写入代理组。',
+    manualMonitor: '仅监控已启用，最佳测量延迟 {score} 毫秒，未写入代理组。',
     manualExternal: '测速期间检测到外部手动切换，已保留当前选择。',
-    manualDisabled: '最佳节点评分 {score}，未执行切换。',
+    manualDisabled: '最佳测量延迟 {score} 毫秒，未执行切换。',
     manualWriteMiss: '控制器接受写入，但读回未确认代理组已切换。',
-    manualSwitched: '已切换到最佳节点，评分 {score}。',
-    manualHeld: '最佳节点评分 {score}，当前无需切换。',
+    manualSwitched: '已切换到本次测量最快节点，延迟 {score} 毫秒。',
+    manualHeld: '最佳测量延迟 {score} 毫秒，当前无需切换。',
     buttonReady: '开始测速并优选',
     backendChanged: '代理客户端已切换。',
     startupEnabled: '开机启动已开启。',
@@ -256,6 +259,7 @@ const text = {
     lockDisabled: '手动保护已解除。',
     settingsSaved: '优选设置已保存。',
     scenarioChanged: '演示场景已切换。',
+    diagnosticsDownloaded: '诊断报告已下载。',
     decisionAction: '动作',
     decisionReason: '原因',
     decisionTarget: '目标',
@@ -404,12 +408,54 @@ async function readResponse(response) {
 }
 
 async function postJson(url, body) {
-  const response = await fetch(url, {
+  const response = await sessionFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
   return readResponse(response);
+}
+
+let sessionToken = null;
+let sessionRequest = null;
+async function sessionFetch(url, options = {}) {
+  if (!sessionToken) {
+    sessionRequest ||= fetch('/api/session', { cache: 'no-store' }).then(readResponse).then((data) => data.token).finally(() => { sessionRequest = null; });
+    sessionToken = await sessionRequest;
+  }
+  const response = await fetch(url, { ...options, cache: 'no-store', headers: { ...options.headers, 'x-pilot-session': sessionToken } });
+  if (response.status === 403) sessionToken = null;
+  return response;
+}
+
+function diagnosticsFilename(data) {
+  const stamp = String(data?.generatedAt || new Date().toISOString()).replace(/[:.]/g, '-');
+  return `clash-node-pilot-diagnostics-${stamp}.json`;
+}
+
+async function downloadDiagnostics() {
+  const op = beginOperation('diagnostics');
+  const button = $('diagnosticsButton');
+  button.disabled = true;
+  try {
+    const response = await sessionFetch('/api/diagnostics');
+    const data = await readResponse(response);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = diagnosticsFilename(data);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setMessage(tr('diagnosticsDownloaded'), '', 5000);
+  } catch (error) {
+    setMessage(error.message, 'error', 8000);
+  } finally {
+    button.disabled = false;
+    endOperation(op);
+  }
 }
 
 function selectedGroup() {
@@ -459,6 +505,7 @@ function updateButton() {
   $('optimizeButton').disabled = isBusy() || !state.group || !state.region || !state.status || !writable;
   $('backendSelect').disabled = isBusy() || !writable;
   $('groupSelect').disabled = isBusy();
+  $('demoScenarioSelect').disabled = isBusy() || Boolean(state.status?.automation?.running);
   $('settingsButton').disabled = isBusy() || !writable;
   $('monitorOnly').disabled = isBusy() || !writable;
   $('lockButton').disabled = isBusy() || !writable;
@@ -520,6 +567,8 @@ function renderAutomation(data) {
     $('automationStatus').textContent = tr('lockedStatus', { minutes: lock, next });
   } else if (automation.monitorOnly) {
     $('automationStatus').textContent = tr('monitorStatus', { next, healNext });
+  } else if (automation.schedulerEnabled === false) {
+    $('automationStatus').textContent = state.lang === 'zh' ? '自动检查已关闭' : 'Automatic checks are disabled';
   } else {
     $('automationStatus').textContent = tr('autoStatus', { interval: settings.autoIntervalMinutes ?? 3, healInterval: settings.connectivityCheckMinutes ?? 1, tracked: automation.trackedNodes || 0 });
   }
@@ -551,7 +600,7 @@ async function loadStatus({ quiet = false } = {}) {
   const seq = ++state.statusSeq;
   if (!quiet) setBackgroundMessage(tr('syncStatus'));
   try {
-    const response = await fetch('/api/status');
+    const response = await sessionFetch('/api/status');
     const data = await readResponse(response);
     if (seq !== state.statusSeq) return;
     state.status = data;
@@ -563,6 +612,7 @@ async function loadStatus({ quiet = false } = {}) {
     $('backendSelect').innerHTML = (data.backends || []).map((backend) => `<option value="${escapeHtml(backend.id)}" ${backend.online ? '' : 'disabled'}>${escapeHtml(backend.name)} · ${backend.online ? `${tr('online')} ${escapeHtml(backend.version || '')}` : tr('offline')}</option>`).join('');
     $('backendSelect').value = data.backend?.id || '';
     const v2rayN = (data.detectedClients || []).find((client) => client.id === 'v2rayn');
+    $('clientInfo').hidden = Boolean(data.demo?.enabled);
     $('clientInfo').textContent = v2rayN?.online
       ? tr('v2rayRunning', { name: v2rayN.current?.name || tr('noGroup'), delay: v2rayN.current?.delay ? ` · ${v2rayN.current.delay} ms` : '' })
       : tr('v2rayOffline');
@@ -723,6 +773,13 @@ async function optimize() {
     setMessage(manualResultMessage(data), '', 6000);
   } catch (error) {
     if (!sameContext()) return;
+    if (error.data?.commit?.verified) {
+      const group = selectedGroup();
+      if (group) group.now = error.data.active;
+      updateCurrent();
+      setMessage(state.lang === 'zh' ? '节点切换已确认，但本地记录保存失败。' : 'Selector switch confirmed, but local state could not be saved.', 'error', 8000);
+      return;
+    }
     if (error.data?.results) renderResults({ ...error.data, active: selectedGroup()?.now }, { source: 'manual' });
     setMessage(error.message, 'error', 8000);
   } finally {
@@ -827,6 +884,7 @@ $('settingsButton').addEventListener('click', () => {
 $('closeSettings').addEventListener('click', () => $('settingsDialog').close());
 $('cancelSettings').addEventListener('click', () => $('settingsDialog').close());
 $('refreshButton').addEventListener('click', () => loadStatus());
+$('diagnosticsButton').addEventListener('click', downloadDiagnostics);
 $('optimizeButton').addEventListener('click', optimize);
 
 $('cancelJobButton').addEventListener('click', async () => {

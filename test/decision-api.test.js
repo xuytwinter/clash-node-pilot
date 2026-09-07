@@ -5,7 +5,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 
-function createController({ active = 'Japan 01', delays = {}, applyPut = true, failReadbackAfterPut = false } = {}) {
+function createController({ active = 'Japan 01', delays = {}, applyPut = true, failReadbackAfterPut = false, onPut = () => {} } = {}) {
   const state = { active, puts: [], delayRequests: [], failProxies: false };
   const resolveDelay = typeof delays === 'function' ? delays : (name) => delays[name];
   const server = http.createServer(async (req, res) => {
@@ -47,6 +47,7 @@ function createController({ active = 'Japan 01', delays = {}, applyPut = true, f
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
       state.puts.push(body.name);
       if (applyPut) state.active = body.name;
+      onPut();
       if (failReadbackAfterPut) state.failProxies = true;
       res.writeHead(204);
       res.end();
@@ -62,7 +63,8 @@ function createController({ active = 'Japan 01', delays = {}, applyPut = true, f
   };
 }
 
-function postJson(port, pathName, body = {}) {
+async function postJson(port, pathName, body = {}) {
+  const { token } = await (await fetch(`http://127.0.0.1:${port}/api/session`)).json();
   return new Promise((resolve, reject) => {
     const req = http.request({
       hostname: '127.0.0.1',
@@ -70,6 +72,7 @@ function postJson(port, pathName, body = {}) {
       path: pathName,
       method: 'POST',
       headers: {
+        'x-pilot-session': token,
         Host: `127.0.0.1:${port}`,
         'Content-Type': 'application/json'
       }
@@ -132,6 +135,26 @@ async function openPilotFromEnv() {
     close: () => new Promise((resolve) => server.close(resolve))
   };
 }
+
+test('confirmed selector write remains explicit when local persistence fails afterwards', async () => {
+  let statePath;
+  const fake = createController({ delays: { 'Japan 01': 150, 'Japan 02': 40 }, onPut() {
+    fs.renameSync(statePath, `${statePath}.before-failure`);
+    fs.mkdirSync(statePath);
+  } });
+  const context = await startPilot(fake, { schemaVersion: 2, selectedBackend: 'demo' });
+  statePath = context.statePath;
+  try {
+    const response = await postJson(context.pilotPort, '/api/optimize', { group: 'Proxy Select', region: 'jp', switch: true });
+    assert.equal(response.status, 507);
+    assert.equal(response.body.code, 'state-save-failed');
+    assert.equal(response.body.commit.verified, true);
+    assert.equal(response.body.active, 'Japan 02');
+    assert.equal(response.body.switched, true);
+    assert.equal(fake.state.active, 'Japan 02');
+    assert.equal(fake.state.puts.length, 1);
+  } finally { await context.close(); }
+});
 
 async function withPilot(fake, stateSnapshot, run) {
   const context = await startPilot(fake, stateSnapshot);

@@ -7,6 +7,9 @@ const path = require('node:path');
 
 function createFakeController() {
   const state = { scenario: 'degraded', scenarios: ['healthy', 'degraded', 'target-outage'] };
+  let scenarioGate = null;
+  let scenarioStarted;
+  const started = new Promise((resolve) => { scenarioStarted = resolve; });
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (req.method === 'GET' && req.url === '/version') {
@@ -30,6 +33,8 @@ function createFakeController() {
       return;
     }
     if (req.method === 'PUT' && url.pathname === '/demo/scenario') {
+      scenarioStarted();
+      if (scenarioGate) await scenarioGate;
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
@@ -48,6 +53,8 @@ function createFakeController() {
   });
   return {
     state,
+    started,
+    holdScenario() { let release; scenarioGate = new Promise((resolve) => { release = resolve; }); return release; },
     listen: () => new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port))),
     close: () => new Promise((resolve) => server.close(resolve))
   };
@@ -61,7 +68,8 @@ function close(app) {
   return new Promise((resolve) => app.close(resolve));
 }
 
-function requestJson(port, pathName, { method = 'GET', body } = {}) {
+async function requestJson(port, pathName, { method = 'GET', body } = {}) {
+  const { token } = await (await fetch(`http://127.0.0.1:${port}/api/session`)).json();
   return new Promise((resolve, reject) => {
     const req = http.request({
       hostname: '127.0.0.1',
@@ -69,6 +77,7 @@ function requestJson(port, pathName, { method = 'GET', body } = {}) {
       path: pathName,
       method,
       headers: {
+        'x-pilot-session': token,
         Host: `127.0.0.1:${port}`,
         ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {})
       }
@@ -122,10 +131,25 @@ test('demo mode exposes only the fake backend and disables OS integrations', asy
     assert.equal(startup.status, 403);
     assert.equal(startup.body.code, 'startup-disabled');
 
-    const scenario = await requestJson(pilotPort, '/api/demo-scenario', { method: 'POST', body: { scenario: 'target-outage' } });
+    await requestJson(pilotPort, '/api/automation', { method: 'POST', body: { action: 'lock' } });
+    await requestJson(pilotPort, '/api/automation', { method: 'POST', body: { action: 'monitor', value: true } });
+    const releaseScenario = fake.holdScenario();
+    const resetting = requestJson(pilotPort, '/api/demo-scenario', { method: 'POST', body: { scenario: 'target-outage' } });
+    await fake.started;
+    try {
+      const overlapping = await requestJson(pilotPort, '/api/demo-scenario', { method: 'POST', body: { scenario: 'healthy' } });
+      assert.equal(overlapping.status, 409);
+      assert.equal(overlapping.body.code, 'job-conflict');
+    } finally { releaseScenario(); }
+    const scenario = await resetting;
     assert.equal(scenario.status, 200);
     assert.equal(scenario.body.scenario, 'target-outage');
     assert.equal(fake.state.scenario, 'target-outage');
+    const reset = await requestJson(pilotPort, '/api/status');
+    assert.equal(reset.body.automation.lockMs, 0);
+    assert.equal(reset.body.automation.monitorOnly, false);
+    assert.equal(reset.body.automation.lastResults, null);
+    assert.deepEqual(reset.body.automation.history, []);
   } finally {
     await close(server);
     await fake.close();

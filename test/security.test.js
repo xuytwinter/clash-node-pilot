@@ -25,14 +25,15 @@ function close(app) {
   return new Promise((resolve) => app.close(resolve));
 }
 
-function request(port, options = {}) {
+async function request(port, options = {}) {
+  const { token } = await (await fetch(`http://127.0.0.1:${port}/api/session`)).json();
   return new Promise((resolve, reject) => {
     const req = http.request({
       hostname: '127.0.0.1',
       port,
       path: options.path || '/api/health',
       method: options.method || 'GET',
-      headers: { Host: `127.0.0.1:${port}`, ...(options.headers || {}) }
+      headers: { Host: `127.0.0.1:${port}`, 'x-pilot-session': token, ...(options.headers || {}) }
     }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
@@ -75,6 +76,11 @@ test('local HTTP API rejects hostile request boundaries before routing', async (
     const ok = await request(port);
     assert.equal(ok.status, 200);
     assert.equal(ok.headers['x-content-type-options'], 'nosniff');
+    const missingSession = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
+    assert.equal(missingSession.status, 403);
+    assert.equal((await missingSession.json()).code, 'invalid-session');
+    const hostileBootstrap = await fetch(`http://127.0.0.1:${port}/api/session`, { headers: { Origin: 'https://evil.test' } });
+    assert.equal(hostileBootstrap.status, 403);
 
     const badHost = await request(port, { headers: { Host: 'attacker.test' } });
     assert.equal(badHost.status, 403);

@@ -31,14 +31,15 @@ function createFakeController() {
   };
 }
 
-function getJson(port, pathName) {
+async function getJson(port, pathName) {
+  const { token } = await (await fetch(`http://127.0.0.1:${port}/api/session`)).json();
   return new Promise((resolve, reject) => {
     const req = http.request({
       hostname: '127.0.0.1',
       port,
       path: pathName,
       method: 'GET',
-      headers: { Host: `127.0.0.1:${port}` }
+      headers: { Host: `127.0.0.1:${port}`, 'x-pilot-session': token }
     }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
@@ -49,7 +50,8 @@ function getJson(port, pathName) {
   });
 }
 
-function postJson(port, pathName, body = {}) {
+async function postJson(port, pathName, body = {}) {
+  const { token } = await (await fetch(`http://127.0.0.1:${port}/api/session`)).json();
   return new Promise((resolve, reject) => {
     const req = http.request({
       hostname: '127.0.0.1',
@@ -57,6 +59,7 @@ function postJson(port, pathName, body = {}) {
       path: pathName,
       method: 'POST',
       headers: {
+        'x-pilot-session': token,
         Host: `127.0.0.1:${port}`,
         'Content-Type': 'application/json'
       }

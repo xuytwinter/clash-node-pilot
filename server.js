@@ -3,15 +3,17 @@ const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { createDiagnosticsReport } = require('./src/core/diagnostics');
 const { execFileSync } = require('node:child_process');
 const { ControllerClient, parseConfig: parseControllerConfig, probeConfigBackend, safeBackend } = require('./src/core/controller');
 const { createRegionResolver, loadRegions, summarizeRegions: summarizeRegionCounts } = require('./src/core/regions');
 const { JobCoordinator } = require('./src/core/jobs');
-const { normalizeProbeUrl, requireJsonContentType, securityHeaders, validateLocalApiRequest } = require('./src/core/security');
+const { normalizeProbeUrl, requireJsonContentType, securityHeaders, validateLocalApiRequest, createLocalSession } = require('./src/core/security');
 const { STATE_SCHEMA_VERSION, clampNumber, sanitizeRuntimeSnapshot } = require('./src/core/state');
 const connectivityCore = require('./src/core/connectivity');
 const decisionCore = require('./src/core/decision');
 const optimizerCore = require('./src/core/optimizer');
+const clock = require('./src/core/clock');
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT || 3210);
@@ -85,10 +87,11 @@ const runtime = {
   diagnostics: [],
   persistence: { writable: true, code: 'ok', message: 'Runtime state is writable', restoredFromBackup: false }
 };
-const coordinator = new JobCoordinator();
+const coordinator = new JobCoordinator({ now: clock.now });
+const localSession = createLocalSession();
 
 function addDiagnostic(code, message) {
-  runtime.diagnostics.unshift({ at: new Date().toISOString(), code, message });
+  runtime.diagnostics.unshift({ at: new Date(clock.now()).toISOString(), code, message });
   runtime.diagnostics = runtime.diagnostics.slice(0, 50);
 }
 
@@ -126,7 +129,7 @@ function readRuntimeSnapshot(filePath) {
   const parsed = JSON.parse(text);
   return {
     upgraded: parsed?.schemaVersion !== STATE_SCHEMA_VERSION,
-    saved: sanitizeRuntimeSnapshot(parsed, DEFAULT_SETTINGS)
+    saved: sanitizeRuntimeSnapshot(parsed, DEFAULT_SETTINGS, { now: clock.now() })
   };
 }
 
@@ -181,7 +184,7 @@ function loadRuntimeState() {
   }
 }
 
-function persistRuntimeState() {
+function persistRuntimeState(commitOutcome = coordinator.current?.commitOutcome) {
   ensureStateWritable();
   let temporary = null;
   try {
@@ -214,10 +217,13 @@ function persistRuntimeState() {
       }
     }
   } catch (error) {
-    if (temporary) fsSync.rmSync(temporary, { force: true });
+    // Cleanup must not hide the save failure or a completed selector write.
+    try { if (temporary) fsSync.rmSync(temporary, { force: true }); } catch {}
     addDiagnostic('state-save-failed', 'Runtime state could not be saved');
     setPersistenceStatus({ writable: false, code: 'state-save-failed', message: 'Runtime state could not be saved; retry after restoring storage access' });
-    throw stateError('Runtime state could not be saved', 507, 'state-save-failed');
+    const failure = stateError('Runtime state could not be saved', 507, 'state-save-failed');
+    if (commitOutcome) failure.commit = commitOutcome;
+    throw failure;
   }
 }
 
@@ -378,6 +384,27 @@ function summarizeRegions(members) {
   return summarizeRegionCounts(members, REGIONS, regionFor);
 }
 
+async function diagnosticsReport() {
+  const backends = await discoverBackends();
+  const backend = backends.find((item) => item.online && item.id === runtime.selectedBackend) || backends.find((item) => item.online);
+  let controller = { connected: Boolean(backend), groups: [], inventory: { ok: false } };
+  if (backend) {
+    try {
+      const { groups } = await inventoryForBackend(backend);
+      controller = { connected: true, groups, inventory: { ok: true, groupCount: groups.length } };
+    } catch (error) { controller.inventory.error = { code: error.code, status: error.status }; }
+  }
+  return createDiagnosticsReport({
+    generatedAt: new Date(clock.now()).toISOString(),
+    app: { version: require('./package.json').version },
+    runtime: { node: process.version, platform: process.platform, arch: process.arch },
+    environment: { demoMode: DEMO_MODE, osIntegrationDisabled: OS_INTEGRATION_DISABLED, autoLoopDisabled: process.env.CLASH_PILOT_DISABLE_AUTO_LOOP === '1' },
+    server: { port: listeningPort() }, startup: startupStatus(), backend, backends, controller,
+    automation: { ...runtime, running: Boolean(coordinator.snapshot()), currentJob: coordinator.snapshot(), activeLocks: [...runtime.locks.values()].filter((at) => at > clock.now()).length },
+    persistence: runtime.persistence, health: runtime.health, lastResults: runtime.lastResults, history: runtime.history, diagnostics: runtime.diagnostics
+  });
+}
+
 async function measureNode(name, testUrl, timeout, request = controllerRequest) {
   return optimizerCore.measureNode(request, name, testUrl, timeout);
 }
@@ -387,9 +414,9 @@ async function measureNodeStable(name, testUrl, timeout, samples = 2, request = 
 }
 
 function addHistory(entry) {
-  runtime.history.unshift({ at: new Date().toISOString(), ...entry });
+  runtime.history.unshift({ at: new Date(clock.now()).toISOString(), ...entry });
   runtime.history = runtime.history.slice(0, 100);
-  persistRuntimeState();
+  persistRuntimeState(entry.commit);
 }
 
 function scopedGroupKey(backend, groupName) {
@@ -403,11 +430,11 @@ function scopedHealth(backend, groupName) {
 function lockRemainingFor(backend, groupName) {
   const scoped = runtime.locks.get(scopedGroupKey(backend, groupName)) || 0;
   const legacy = runtime.locks.get(groupName) || 0;
-  return Math.max(0, Math.max(scoped, legacy) - Date.now());
+  return Math.max(0, Math.max(scoped, legacy) - clock.now());
 }
 
 function lockGroup(backend, groupName, durationMs = runtime.settings.manualPauseMinutes * 60000) {
-  const expiresAt = Date.now() + durationMs;
+  const expiresAt = clock.now() + durationMs;
   runtime.locks.set(scopedGroupKey(backend, groupName), expiresAt);
   runtime.locks.delete(groupName);
   return durationMs;
@@ -437,7 +464,7 @@ function getLastSwitch(backend, groupName) {
   return runtime.lastSwitch.has(scoped) ? runtime.lastSwitch.get(scoped) : runtime.lastSwitch.get(groupName);
 }
 
-function setLastSwitch(backend, groupName, value = Date.now()) {
+function setLastSwitch(backend, groupName, value = clock.now()) {
   runtime.lastSwitch.set(scopedGroupKey(backend, groupName), value);
   runtime.lastSwitch.delete(groupName);
 }
@@ -446,7 +473,7 @@ function boundedNumber(value, fallback, min, max, { integer = true } = {}) {
   return clampNumber(value, fallback, min, max, { integer });
 }
 
-function nextAutoRunIso(now = Date.now()) {
+function nextAutoRunIso(now = clock.now()) {
   return new Date(now + runtime.settings.autoIntervalMinutes * 60000).toISOString();
 }
 
@@ -501,23 +528,20 @@ async function applySelectorDecision({ backend, request, group, target, allowSwi
     });
     active = await readGroupNow(commitRequest, group.name);
   } catch (error) {
+    const commit = selectorCommitState({ started: true, writeResult: 'unknown', verified: false, reasonCode: 'write-result-unknown', active: null, target, job, error });
+    if (job) Object.defineProperty(job, 'commitOutcome', { configurable: true, value: commit });
     return {
       active: group.now,
       switched: false,
       reasonCode: 'write-result-unknown',
-      commit: selectorCommitState({
-        started: true,
-        writeResult: 'unknown',
-        verified: false,
-        reasonCode: 'write-result-unknown',
-        active: null,
-        target,
-        job,
-        error
-      })
+      commit
     };
   }
   const switched = active === target;
+  if (job) Object.defineProperty(job, 'commitOutcome', {
+    configurable: true,
+    value: selectorCommitState({ started: true, writeResult: switched ? 'verified' : 'not-applied', verified: switched, reasonCode: switched ? 'switched' : 'write-not-applied', active, target, job })
+  });
   if (switched) setLastSwitch(backend, group.name);
   if (switched && jobKind === 'manual') {
     lockGroup(backend, group.name);
@@ -541,12 +565,13 @@ async function applySelectorDecision({ backend, request, group, target, allowSwi
 
 function updateHealth(results, scope = {}) {
   optimizerCore.updateHealth(runtime.health, results, scope, {
+    now: clock.now(),
     healthHalfLifeMinutes: runtime.settings.healthHalfLifeMinutes
   });
 }
 
 function healthScore(result, scope = {}) {
-  return decisionCore.scoreNode(result, runtime.health[optimizerCore.scopedNodeKey(scope, result.name)] || runtime.health[result.name], optimizerCore.scopedNodeKey(scope, result.name), runtime.settings).score;
+  return decisionCore.scoreNode(result, runtime.health[optimizerCore.scopedNodeKey(scope, result.name)] || runtime.health[result.name], optimizerCore.scopedNodeKey(scope, result.name), runtime.settings, { now: clock.now() }).score;
 }
 
 function healthSnapshot() {
@@ -558,7 +583,7 @@ function healthSnapshot() {
 
 function healthScoreFrom(result, scope = {}, health = runtime.health) {
   const key = optimizerCore.scopedNodeKey(scope, result.name);
-  return decisionCore.scoreNode(result, health[key] || health[result.name], key, runtime.settings).score;
+  return decisionCore.scoreNode(result, health[key] || health[result.name], key, runtime.settings, { now: clock.now() }).score;
 }
 
 function healthByName(results, scope = {}, health = runtime.health) {
@@ -624,7 +649,7 @@ function selectorDecisionEvent({ code, reason, currentName, active, best, curren
     ? 'uncertain'
     : (code === 'switched' ? 'switch' : 'hold');
   return {
-    at: new Date().toISOString(),
+    at: new Date(clock.now()).toISOString(),
     action,
     code,
     reason,
@@ -696,7 +721,7 @@ function resolveEffectiveSelector(proxies, groupName) {
 async function runConnectivityHeal(body = {}) {
   const backend = await activeBackend();
   if (!backend) throw apiError('No supported Clash/Mihomo controller is online', 503, 'controller-offline');
-  const now = Date.now();
+  const now = clock.now();
 
   return coordinator.run('connectivity-heal', { backend, timeoutMs: jobBudgetFromBody(body, 60000) }, async (job) => {
     runtime.nextConnectivityCheckAt = new Date(now + runtime.settings.connectivityCheckMinutes * 60000).toISOString();
@@ -816,7 +841,7 @@ async function runConnectivityHeal(body = {}) {
 
 function recordConnectivityResult(result) {
   runtime.lastResults = {
-    at: new Date().toISOString(),
+    at: new Date(clock.now()).toISOString(),
     source: 'connectivity-heal',
     backend: result.backend,
     group: result.group,
@@ -908,7 +933,7 @@ async function runManualOptimize(body) {
 }
 
 async function runAutomaticOptimize(body = {}) {
-  const now = Date.now();
+  const now = clock.now();
   const nextRunAt = Date.parse(runtime.nextRunAt || '');
   if (!body.force && Number.isFinite(nextRunAt) && nextRunAt > now) {
     return { status: 200, body: { skipped: true, reason: 'Not due yet', code: 'not-due', nextRunAt: runtime.nextRunAt } };
@@ -953,7 +978,7 @@ async function runAutomaticOptimize(body = {}) {
     let results = candidates.length ? await mapLimit(candidates, 6, (name) => measureNodeStable(name, DEFAULT_TEST_URL, 5000, samples, request, job), { signal: job.signal }) : [];
     addMeasured(measuredForHealth, results);
     let currentResult = results.find((item) => item.name === group.now) || null;
-    let ranked = decisionCore.rankCandidates(results, healthByName(results, scope, decisionHealth), runtime.settings, { now: Date.now(), scopeKey: scopedGroupKey(backend, group.name) });
+    let ranked = decisionCore.rankCandidates(results, healthByName(results, scope, decisionHealth), runtime.settings, { now: clock.now(), scopeKey: scopedGroupKey(backend, group.name) });
     let best = ranked.best?.result || null;
     let fallbackFrom = null;
     let hardFailure = Boolean(currentResult && !currentResult.ok);
@@ -963,7 +988,7 @@ async function runAutomaticOptimize(body = {}) {
       const sameRegionVerify = candidates.length ? await mapLimit(candidates, 6, (name) => measureNodeStable(name, VERIFY_TEST_URL, 5000, samples, request, job), { signal: job.signal }) : [];
       addMeasured(measuredForHealth, sameRegionVerify);
       if (sameRegionVerify.length) resultBatches.push({ target: VERIFY_TEST_URL, fallbackFrom: null, candidates: [...candidates], results: sameRegionVerify });
-      const verifyRanked = decisionCore.rankCandidates(sameRegionVerify, healthByName(sameRegionVerify, scope, decisionHealth), runtime.settings, { now: Date.now(), scopeKey: scopedGroupKey(backend, group.name) });
+      const verifyRanked = decisionCore.rankCandidates(sameRegionVerify, healthByName(sameRegionVerify, scope, decisionHealth), runtime.settings, { now: clock.now(), scopeKey: scopedGroupKey(backend, group.name) });
       const verifyBest = verifyRanked.best?.result || null;
       if (verifyBest) {
         updateHealth(measuredForHealth, scope);
@@ -984,7 +1009,7 @@ async function runAutomaticOptimize(body = {}) {
       addMeasured(measuredForHealth, fallbackResults);
       if (fallbackResults.length) resultBatches.push({ target: VERIFY_TEST_URL, fallbackFrom, candidates: [...alternatives], results: fallbackResults });
       const decisionInputs = currentResult ? [...fallbackResults, currentResult] : fallbackResults;
-      ranked = decisionCore.rankCandidates(decisionInputs, healthByName(decisionInputs, scope, decisionHealth), runtime.settings, { now: Date.now(), scopeKey: scopedGroupKey(backend, group.name) });
+      ranked = decisionCore.rankCandidates(decisionInputs, healthByName(decisionInputs, scope, decisionHealth), runtime.settings, { now: clock.now(), scopeKey: scopedGroupKey(backend, group.name) });
       best = ranked.scored.filter((item) => fallbackResults.some((result) => result.name === item.name)).find((item) => item.ok)?.result || null;
       results = fallbackResults;
     }
@@ -1007,7 +1032,7 @@ async function runAutomaticOptimize(body = {}) {
       allowSwitch: true,
       monitorOnly: runtime.monitorOnly,
       hardFailure,
-      now: Date.now(),
+      now: clock.now(),
       scopeKey: scopedGroupKey(backend, group.name)
     });
     const orderedResults = scoredResultsFromDecision(decisionEvent);
@@ -1034,7 +1059,7 @@ async function runAutomaticOptimize(body = {}) {
     setLastAuto(backend, group.name, decision.active);
     updateHealth(measuredForHealth, scope);
     runtime.lastResults = {
-      at: new Date().toISOString(),
+      at: new Date(clock.now()).toISOString(),
       source: 'automatic',
       backend: backend.id,
       group: group.name,
@@ -1070,7 +1095,7 @@ async function runAutomaticOptimize(body = {}) {
 }
 
 async function runScheduledOptimize(body = {}) {
-  const now = Date.now();
+  const now = clock.now();
   const nextRunAt = Date.parse(runtime.nextRunAt || '');
   const nextConnectivityCheckAt = Date.parse(runtime.nextConnectivityCheckAt || '');
   const optimizationDue = body.force || !Number.isFinite(nextRunAt) || nextRunAt <= now;
@@ -1078,11 +1103,11 @@ async function runScheduledOptimize(body = {}) {
 
   if (connectivityDue) {
     const heal = await runConnectivityHeal({ ...body, switch: true });
-    persistRuntimeState();
+    persistRuntimeState(heal.body.commit);
     const result = heal.body;
     if (!result.skipped || result.code === 'target-service-outage' || result.code === 'common-probe-failure' || result.code === 'all-candidates-failed') {
       recordConnectivityResult(result);
-      persistRuntimeState();
+      persistRuntimeState(result.commit);
       return heal;
     }
   }
@@ -1158,6 +1183,9 @@ async function apiHandler(req, res, url) {
       port: listeningPort()
     });
   }
+  if (req.method === 'GET' && url.pathname === '/api/diagnostics') {
+    return sendJson(res, 200, await diagnosticsReport());
+  }
   if (req.method === 'GET' && url.pathname === '/api/status') {
     const { groups, backend } = await inventory();
     const targetGroup = await pickPrimaryGroup(groups, backend);
@@ -1174,7 +1202,7 @@ async function apiHandler(req, res, url) {
       groups: groups.map((group) => ({ name: group.name, now: group.now, nodeCount: group.members.length, regions: summarizeRegions(group.members) })),
       targetGroup: targetGroup?.name,
       targetSource: backend.id === 'clash-verge' && (await selectedUiGroup(groups)) ? 'clash-verge-ui' : 'fallback',
-      automation: { running: Boolean(currentJob), currentJob, startedAt: currentJob?.startedAt || null, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, nextConnectivityCheckAt: runtime.nextConnectivityCheckAt, lockMs: targetGroup ? lockRemainingFor(backend, targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
+      automation: { schedulerEnabled: process.env.CLASH_PILOT_DISABLE_AUTO_LOOP !== '1' || process.env.CLASH_PILOT_DEMO_AUTO === '1', running: Boolean(currentJob), currentJob, startedAt: currentJob?.startedAt || null, history: runtime.history, lastResults: runtime.lastResults, nextRunAt: runtime.nextRunAt, nextConnectivityCheckAt: runtime.nextConnectivityCheckAt, lockMs: targetGroup ? lockRemainingFor(backend, targetGroup.name) : 0, monitorOnly: Boolean(runtime.monitorOnly), settings: runtime.settings, trackedNodes: Object.keys(runtime.health).length },
       persistence: runtime.persistence,
       demo,
       diagnostics: runtime.diagnostics,
@@ -1186,13 +1214,28 @@ async function apiHandler(req, res, url) {
     if (typeof body.scenario !== 'string' || !body.scenario) throw apiError('scenario must be a non-empty string', 400, 'invalid-scenario');
     const backend = await activeBackend();
     if (!backend) throw apiError('Demo controller is offline', 503, 'controller-offline');
-    const request = controllerRequestForBackend(backend);
-    await request('/demo/scenario', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({ scenario: body.scenario })
+    ensureStateWritable();
+    const result = await coordinator.run('demo-reset', { backend, timeoutMs: 15000 }, async (job) => {
+      const request = controllerRequestForBackend(backend);
+      job.beginCommit();
+      await request('/demo/scenario', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ scenario: body.scenario })
+      });
+      runtime.history = [];
+      runtime.health = {};
+      runtime.lastResults = null;
+      runtime.locks.clear();
+      runtime.lastAuto.clear();
+      runtime.lastSwitch.clear();
+      runtime.nextRunAt = null;
+      runtime.nextConnectivityCheckAt = null;
+      runtime.monitorOnly = false;
+      persistRuntimeState();
+      return demoStatus(backend);
     });
-    return sendJson(res, 200, await demoStatus(backend));
+    return sendJson(res, 200, result);
   }
   if (url.pathname === '/api/startup' && req.method === 'POST') {
     const body = await readJson(req);
@@ -1247,7 +1290,7 @@ async function apiHandler(req, res, url) {
     ensureStateWritable();
     const result = await runConnectivityHeal(body);
     recordConnectivityResult(result.body);
-    persistRuntimeState();
+    persistRuntimeState(result.body.commit);
     return sendJson(res, result.status, result.body);
   }
   if (req.method === 'POST' && url.pathname === '/api/auto-optimize') {
@@ -1275,12 +1318,14 @@ const server = http.createServer({ maxHeaderSize: 8192 }, async (req, res) => {
   try {
     validateLocalApiRequest(req, { port: listeningPort() });
     const url = new URL(req.url, `http://${req.headers.host || HOST}`);
+    if (url.pathname === '/api/session') return localSession.bootstrap(req, res, { port: listeningPort() });
+    if (url.pathname.startsWith('/api/') && url.pathname !== '/api/health') localSession.authorize(req, { port: listeningPort() });
     if (url.pathname.startsWith('/api/')) await apiHandler(req, res, url);
     else await staticHandler(res, url);
   } catch (error) {
     const status = error.code === 'ENOENT' ? 404 : error.name === 'TimeoutError' ? 504 : error.status || 500;
     const message = status === 500 ? `无法连接 Clash Verge：${error.message}` : error.message;
-    sendJson(res, status, { error: message, code: error.code || 'internal-error' });
+    sendJson(res, status, { error: message, code: error.code || 'internal-error', ...(error.commit ? { commit: error.commit, active: error.commit.active, switched: error.commit.verified, persistence: runtime.persistence } : {}) });
   }
 });
 
@@ -1290,9 +1335,12 @@ if (require.main === module) {
     console.log(`Clash Node Pilot: http://${HOST}:${boundPort}`);
     if (process.env.CLASH_PILOT_DISABLE_AUTO_LOOP !== '1') {
       const runAutomaticCheck = async () => {
-        await fetch(`http://${HOST}:${boundPort}/api/auto-optimize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+        try {
+          const { token } = await (await fetch(`http://${HOST}:${boundPort}/api/session`)).json();
+          await fetch(`http://${HOST}:${boundPort}/api/auto-optimize`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-pilot-session': token }, body: '{}' });
+        } catch {}
         const nextRunAt = Date.parse(runtime.nextRunAt || '');
-        const delay = Number.isFinite(nextRunAt) ? Math.min(60000, Math.max(5000, nextRunAt - Date.now())) : 30000;
+        const delay = Number.isFinite(nextRunAt) ? Math.min(60000, Math.max(5000, nextRunAt - clock.now())) : 30000;
         setTimeout(runAutomaticCheck, delay);
       };
       setTimeout(runAutomaticCheck, 10000);
@@ -1300,4 +1348,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseConfig, regionFor, summarizeRegions, mapLimit, detectSelectedGroupFromBuffer, resolvePilotDataDir, resolveStatePath, migrateLegacyState, resolveEffectiveSelector, realMembers, server };
+module.exports = { parseConfig, regionFor, summarizeRegions, diagnosticsReport, mapLimit, detectSelectedGroupFromBuffer, resolvePilotDataDir, resolveStatePath, migrateLegacyState, resolveEffectiveSelector, realMembers, server };

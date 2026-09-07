@@ -53,7 +53,8 @@ function createFakeController() {
   };
 }
 
-function postJson(port, pathName, body = {}) {
+async function postJson(port, pathName, body = {}) {
+  const { token } = await (await fetch(`http://127.0.0.1:${port}/api/session`)).json();
   return new Promise((resolve, reject) => {
     const req = http.request({
       hostname: '127.0.0.1',
@@ -61,6 +62,7 @@ function postJson(port, pathName, body = {}) {
       path: pathName,
       method: 'POST',
       headers: {
+        'x-pilot-session': token,
         Host: `127.0.0.1:${port}`,
         'Content-Type': 'application/json'
       }

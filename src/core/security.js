@@ -1,4 +1,5 @@
 const net = require('node:net');
+const { randomBytes, timingSafeEqual } = require('node:crypto');
 
 const DEFAULT_ALLOWED_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
@@ -27,7 +28,7 @@ function parsePort(value) {
 function parseHostHeader(hostHeader) {
   if (typeof hostHeader !== 'string' || !hostHeader.trim()) return null;
   const value = hostHeader.trim();
-  if (value !== hostHeader || /[@/?#]/.test(value)) return null;
+  if (value !== hostHeader || /[\s\\@/?#]/.test(value)) return null;
 
   let host;
   let portText;
@@ -73,24 +74,58 @@ function isSameLocalOrigin(value, { port, allowedHosts = DEFAULT_ALLOWED_HOSTS, 
   }
 }
 
-function validateLocalApiRequest(req, { port } = {}) {
+function validateLocalApiRequest(req, { port = req.socket?.localPort } = {}) {
   if (!isAllowedHostHeader(req.headers.host, { port })) {
     throw securityError('Rejected request host', 'invalid-host', 403);
   }
-  if (req.method === 'GET' || req.method === 'HEAD') return;
-
   const origin = req.headers.origin;
   const referer = req.headers.referer;
   const fetchSite = req.headers['sec-fetch-site'];
-  if (origin && !isSameLocalOrigin(origin, { port, serialized: true })) {
+  const requestOrigin = new URL(`http://${req.headers.host}`).origin;
+  if (origin !== undefined && (!isSameLocalOrigin(origin, { port, serialized: true }) || origin !== requestOrigin)) {
     throw securityError('Rejected cross-origin request', 'cross-origin-request', 403);
   }
-  if (!origin && referer && !isSameLocalOrigin(referer, { port })) {
+  if (origin === undefined && referer !== undefined
+    && (typeof referer !== 'string' || !referer.trim()
+      || !isSameLocalOrigin(referer, { port }) || new URL(referer).origin !== requestOrigin)) {
     throw securityError('Rejected cross-origin request', 'cross-origin-request', 403);
   }
-  if (fetchSite && !['same-origin', 'same-site', 'none'].includes(String(fetchSite).toLowerCase())) {
+  if (fetchSite !== undefined && !['same-origin', 'none'].includes(fetchSite)) {
     throw securityError('Rejected cross-site request', 'cross-site-request', 403);
   }
+}
+
+function createLocalSession() {
+  const token = randomBytes(32).toString('hex');
+  const expected = Buffer.from(token, 'ascii');
+
+  function authorize(req, options) {
+    validateLocalApiRequest(req, options);
+    const supplied = req.headers['x-pilot-session'];
+    if (typeof supplied !== 'string' || supplied.length !== token.length) {
+      throw securityError('A valid local session is required', 'invalid-session', 403);
+    }
+    const candidate = Buffer.from(supplied, 'utf8');
+    if (candidate.length !== expected.length || !timingSafeEqual(candidate, expected)) {
+      throw securityError('A valid local session is required', 'invalid-session', 403);
+    }
+    return true;
+  }
+
+  function bootstrap(req, res, options) {
+    validateLocalApiRequest(req, options);
+    if (req.method !== 'GET') {
+      throw securityError('Session bootstrap requires GET', 'method-not-allowed', 405);
+    }
+    res.writeHead(200, {
+      ...securityHeaders(),
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store'
+    });
+    res.end(JSON.stringify({ token }));
+  }
+
+  return Object.freeze({ authorize, bootstrap });
 }
 
 function requireJsonContentType(req) {
@@ -177,6 +212,7 @@ function securityHeaders({ html = false } = {}) {
 module.exports = {
   DEFAULT_ALLOWED_HOSTS,
   DEFAULT_PROBE_URLS,
+  createLocalSession,
   isAllowedHostHeader,
   isSameLocalOrigin,
   normalizeControllerUrl,
