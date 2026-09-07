@@ -25,7 +25,7 @@ Implementation and acceptance details: [Windows installer](windows-installer.md)
 - [x] Preserve user state during same-version reinstall and uninstall; refuse live-runtime replacement.
 - [x] Verify installation, reinstall, uninstall, desktop integration and Chinese/spaced paths in isolated Windows environments.
 - [ ] Verify cross-version installer upgrades and downgrades with matching state backups.
-- [ ] Publish the installer alongside the portable ZIP with checksums and source metadata after acceptance.
+- [x] Publish the installer alongside the portable ZIP with checksums and source metadata after acceptance: [v0.3.0](https://github.com/xuytwinter/clash-node-pilot/releases/tag/v0.3.0).
 
 The installed application retains the local-browser UI. A standalone desktop window is a separate milestone. Initial builds may be unsigned; distribution must state signing status accurately.
 
