@@ -1,5 +1,7 @@
 # Clash Node Pilot
 
+[中文](README.zh-CN.md) | [Delivery roadmap / 路线图](docs/ROADMAP.md)
+
 Clash Node Pilot is a local Windows dashboard for testing and switching Clash/Mihomo selector nodes by region and health score. It talks to the Mihomo external controller on the same machine, keeps controller secrets on the Node.js backend, and sends selector changes with PUT, then reads the controller state back and reports success only when the requested selection is confirmed.
 
 > Unofficial project. Clash Node Pilot is not affiliated with Clash Verge Rev, Clash for Windows, Mihomo, v2rayN, OpenAI, or any proxy provider.

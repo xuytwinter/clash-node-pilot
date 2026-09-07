@@ -1,5 +1,7 @@
 # Clash Node Pilot
 
+[English](README.md) | [交付路线图](docs/ROADMAP.md)
+
 Clash Node Pilot 是一个运行在 Windows 本机的 Clash/Mihomo 节点优选控制台。它只监听 `127.0.0.1`，通过本机 Mihomo external controller 读取代理组、测速并切换 `Selector`，Controller secret 只保留在本地 Node.js 后端，不返回浏览器、不写入日志、不写入发布说明。
 
 > 非官方项目。本项目与 Clash Verge Rev、Clash for Windows、Mihomo、v2rayN、OpenAI 或任何代理服务商均无隶属关系。
