@@ -32,4 +32,6 @@ Lifecycle acceptance uses the actual EXE with `/NOINTEGRATION=1` in a unique tem
 
 Windows runner acceptance also exercises default Start Menu launch/stop links, optional desktop links, uninstall registration and their removal, with Unicode shell-link inspection. It confirms installation does not enable autostart. Evidence: [installer acceptance workflow](https://github.com/xuytwinter/clash-node-pilot/actions/workflows/installer.yml). Real-client migration, older-release downgrades and SmartScreen behavior remain unverified.
 
+Version 0.3.0 to 0.4.0 isolated installation upgrade and desktop integration passed on source `65a9cda`: [acceptance run](https://github.com/xuytwinter/clash-node-pilot/actions/runs/34156504909). This preserves synthetic state files; it does not claim a user's historical runtime-state migration.
+
 See the [delivery roadmap](ROADMAP.md) for remaining gates.

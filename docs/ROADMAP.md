@@ -24,7 +24,8 @@ Implementation and acceptance details: [Windows installer](windows-installer.md)
 - [x] Provide Start Menu and optional desktop shortcuts, with no implicit autostart.
 - [x] Preserve user state during same-version reinstall and uninstall; refuse live-runtime replacement.
 - [x] Verify installation, reinstall, uninstall, desktop integration and Chinese/spaced paths in isolated Windows environments.
-- [ ] Verify cross-version installer upgrades and downgrades with matching state backups.
+- [x] Verify the published 0.3.0 installer upgrades to 0.4.0 while preserving external and unmanaged portable state: [upgrade acceptance](https://github.com/xuytwinter/clash-node-pilot/actions/runs/34156504909).
+- [ ] Verify installer downgrades and historical runtime-state migrations with matching backups.
 - [x] Publish the installer alongside the portable ZIP with checksums and source metadata after acceptance: [v0.3.0](https://github.com/xuytwinter/clash-node-pilot/releases/tag/v0.3.0).
 
 The installed application retains the local-browser UI. A standalone desktop window is a separate milestone. Initial builds may be unsigned; distribution must state signing status accurately.
