@@ -1167,7 +1167,9 @@ async function apiHandler(req, res, url) {
       name: 'Clash Node Pilot',
       version: require('./package.json').version,
       host: HOST,
-      port: listeningPort()
+      port: listeningPort(),
+      ...(process.env.CLASH_PILOT_INSTANCE && process.env.CLASH_PILOT_INSTANCE.length <= 128
+        ? { instance: process.env.CLASH_PILOT_INSTANCE } : {})
     });
   }
   if (req.method === 'GET' && url.pathname === '/api/diagnostics') {

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0] - 2026-09-08
+
+- Add Apple Silicon and Intel macOS application bundles and DMGs with bundled Node.js, source metadata and checksums.
+- Add a native menu-bar launcher with controller-file selection, instance health verification and owned-service shutdown.
+- Isolate macOS configuration discovery and Application Support state paths from Windows integrations.
+- Gate combined Windows/macOS publication on package lifecycle acceptance for each architecture.
+- Document ad-hoc macOS signing and remaining notarization, physical-device and real-client acceptance limits.
+
 ## [0.3.0] - 2026-09-07
 
 - Add a public bilingual delivery roadmap linked from both READMEs.

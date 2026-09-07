@@ -1,0 +1,48 @@
+name: macOS Application Acceptance
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main, 'codex/**']
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    name: Application (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      - name: Run core regression
+        run: npm test
+      - name: Build native application and DMG
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: bash scripts/build-macos.sh
+      - name: Accept installed application
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: bash scripts/smoke-macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-release-assets
+          if-no-files-found: error
+          path: |
+            outputs/*.dmg
+            outputs/*.dmg.sha256
+            outputs/*.dmg.build.json

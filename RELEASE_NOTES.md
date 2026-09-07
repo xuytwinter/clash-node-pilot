@@ -1,52 +1,40 @@
-# Clash Node Pilot v0.3.0 Preview
+# Clash Node Pilot v0.4.0
 
-Windows 10/11 x64 preview with both a per-user Setup.exe and portable ZIP, bundling official Node.js 22.x. Requires an already-running compatible Clash/Mihomo controller for real node operations; v2rayN remains read-only.
+Native macOS menu-bar application and Windows per-user installer, both with a bundled Node.js 22 runtime and the existing local-browser dashboard. Requires an already-running Clash/Mihomo local controller for real node operations.
+
+## Downloads
+
+| System | Asset |
+| --- | --- |
+| Windows 10/11 x64 | `clash-node-pilot-v0.4.0-windows-x64-setup.exe` |
+| Windows x64 portable | `clash-node-pilot-v0.4.0-windows-x64-portable.zip` |
+| macOS 13+ Apple Silicon | `clash-node-pilot-v0.4.0-macos-arm64.dmg` |
+| macOS 13+ Intel | `clash-node-pilot-v0.4.0-macos-x64.dmg` |
+
+Each package has a SHA256 file. Installer and DMG build manifests record the source commit and signing status. No Git, npm install or preinstalled Node runtime is required.
 
 ## Changes
 
-- Add a per-user Windows installer, Start Menu launch/stop entries and optional desktop shortcut. Autostart stays opt-in.
-- Preserve user state during uninstall and same-version reinstall; refuse running-runtime replacement and linked installation directories.
-- Record installer and payload source commits separately, with pinned compiler verification and SHA256 files.
-- Add real installer lifecycle and runner desktop-integration checks. See [installer verification limits](https://github.com/xuytwinter/clash-node-pilot/blob/main/docs/windows-installer.md).
-- Publish an accessible bilingual roadmap and an audited macOS delivery plan. No macOS package is included yet.
+- Add a native macOS menu-bar launcher, controller configuration file picker, bounded startup and owned-process shutdown.
+- Verify the launched service's instance identifier before opening its dashboard; handle repeated launch and occupied ports.
+- Store macOS state in `~/Library/Application Support/ClashNodePilot`; retain explicit `CLASH_PILOT_STATE` and `CLASH_CONFIG` overrides.
+- Build and exercise Apple Silicon and Intel DMGs on their matching macOS runners, alongside Windows installer lifecycle checks. Publication waits for every package gate.
+- Retain local API sessions, redacted diagnostics, coordinated jobs, state recovery, and selector PUT followed by readback.
 
-- Local session tokens protect API requests, including status and diagnostics.
-- Diagnostic exports contain only whitelist fields with report-local anonymous identifiers. Timings and statistics remain; review before sharing.
-- Demo scenario changes reset runtime history, health, results, locks and cooldown; active jobs return HTTP 409.
-- Windows startup uses consistent PORT handling and quoted paths. The watchdog checks only Node Pilot health and does not terminate Clash. Node handles automatic scheduling without a second PowerShell optimizer loop.
-- Build metadata records source SHA and working-tree status. Native command failures stop build and publication.
-- Synthetic benchmarks now report simulated steps, probe costs and policy tradeoffs. [Budgets are unequal](docs/benchmarks.md); these are not real internet recovery measurements.
+## Install and Quit
 
-Manual tests rank single-run latency. Automatic optimization incorporates historical health, repeated samples, threshold and cooldown. Selector changes use PUT followed by readback before confirmed success is reported.
+On Windows, run Setup and use the Start Menu launch/stop entries, or extract the portable ZIP and run `start-clash-node-pilot.cmd`. On macOS, mount the matching DMG, drag **Clash Node Pilot.app** to Applications, then open it. The **CN** menu-bar item provides **Open Dashboard**, **Choose Controller Config**, and **Quit**. If discovery fails, select the running client's YAML containing its local external controller and secret.
 
-## Start
+The dashboard opens at `http://127.0.0.1:3210`. Closing a browser tab does not stop the service. Quit from the Mac menu or use Windows **Stop Clash Node Pilot** before upgrading.
 
-1. Obtain `clash-node-pilot-v0.3.0-windows-x64-setup.exe` or `clash-node-pilot-v0.3.0-windows-x64-portable.zip`, and its `.sha256`.
-2. Verify the SHA256. Run Setup for per-user installation, or extract the ZIP to a separate folder.
-3. Use the Start Menu shortcut, or run `start-clash-node-pilot.cmd` from the portable folder.
+## Verification Limits
 
-The installer is unsigned. Checksums do not establish publisher identity or SmartScreen reputation. Closing the browser does not stop the server; installed users can select Stop Clash Node Pilot before upgrading or uninstalling.
+Windows Setup is unsigned. macOS bundles use ad-hoc signing, without Developer ID or Apple notarization. Checksums verify file integrity, not publisher identity. Gatekeeper and SmartScreen may block or warn on downloaded applications; see [macOS installation guidance](https://github.com/xuytwinter/clash-node-pilot/blob/main/docs/macos-delivery.md). There is no automatic update or macOS login startup.
 
-Default URL: `http://127.0.0.1:3210`. Set `PORT` for a different port. The package requires neither Git nor npm install nor a preinstalled Node runtime.
+CI exercises real packages in isolated runners. It does not establish physical-device, every supported OS version, or real Clash-client compatibility. macOS 13 is the build deployment target; the application runners use macOS 15. Real-device Gatekeeper and client acceptance remain open, so this release does not claim signed, universally verified production support.
 
-## Upgrade and Rollback
+## State and Rollback
 
-Stop the old Node Pilot instance and back up the state file plus its `.bak` before starting the new package. State defaults to `%LOCALAPPDATA%\ClashNodePilot\state.json`; preserve any custom `CLASH_PILOT_STATE`. Reinstall startup entries from the new application folder.
+Back up the state file and its `.bak` before upgrading. Windows defaults to `%LOCALAPPDATA%\ClashNodePilot\state.json`; macOS uses the path above. Removing the application retains external user state. Use a matching backup and separate state path when rolling back; a newer unknown schema disables writes. Cross-version installer downgrade and real-client upgrades remain unverified.
 
-Compatible older state is sanitized and migrated. Invalid state is preserved and a valid backup is used when possible. A newer unknown schema disables state writes and mutating actions. Roll back using the older application with its matching pre-upgrade state copy at a separate path, rather than overwriting newer state. Isolated recovery tests do not establish a verified upgrade on a user's real machine.
-
-## API and Limits
-
-Get `{token}` from `GET /api/session`, then send `x-pilot-session: <token>` for every other API route except `/api/health`. JSON POST also requires `Content-Type: application/json`. Same-user malicious local processes are outside this security boundary.
-
-No standalone desktop window, Electron, mobile or non-Windows package is included. Only compatible writable selectors can be changed; proxy subscriptions are not configured. Cross-version installer downgrade and real-client upgrade compatibility remain unverified.
-
-## Verification and Startup Removal
-
-```powershell
-Get-FileHash -Algorithm SHA256 .\clash-node-pilot-v0.3.0-windows-x64-setup.exe
-Get-Content .\clash-node-pilot-v0.3.0-windows-x64-setup.exe.sha256
-powershell.exe -ExecutionPolicy Bypass -File .\uninstall-pilot-autostart.ps1
-```
-
-Use elevated PowerShell to remove administrator-installed scheduled tasks when needed.
+[Roadmap](https://github.com/xuytwinter/clash-node-pilot/blob/main/docs/ROADMAP.md) | [Windows installer details](https://github.com/xuytwinter/clash-node-pilot/blob/main/docs/windows-installer.md)

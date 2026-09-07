@@ -9,8 +9,9 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  windows:
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -149,26 +150,41 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: clash-node-pilot-release-assets
+          name: windows-release-assets
           path: |
             outputs/*.zip
             outputs/*.sha256
             outputs/*-setup.exe
             outputs/*-setup.exe.build.json
 
-      - name: Publish GitHub Release
+  macos:
+    uses: ./.github/workflows/macos.yml
+
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-release-assets'
+          merge-multiple: true
+          path: release-assets
+      - name: Publish verified assets
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: pwsh
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          $version = '${{ github.ref_name }}'.Substring(1)
-          gh release create '${{ github.ref_name }}' `
-            "outputs\clash-node-pilot-v$version-windows-x64-portable.zip" `
-            "outputs\clash-node-pilot-v$version-windows-x64-portable.zip.sha256" `
-            "outputs\clash-node-pilot-v$version-windows-x64-setup.exe" `
-            "outputs\clash-node-pilot-v$version-windows-x64-setup.exe.sha256" `
-            "outputs\clash-node-pilot-v$version-windows-x64-setup.exe.build.json" `
-            --title "Clash Node Pilot v$version Preview" `
-            --notes-file RELEASE_NOTES.md `
-            --latest
-          if ($LASTEXITCODE -ne 0) { throw 'GitHub release publication failed' }
+          set -euo pipefail
+          cd release-assets
+          version="${RELEASE_TAG#v}"
+          for name in "windows-x64-portable.zip" "windows-x64-setup.exe" "macos-arm64.dmg" "macos-x64.dmg"; do
+            test -s "clash-node-pilot-v$version-$name"
+            test -s "clash-node-pilot-v$version-$name.sha256"
+          done
+          for name in windows-x64-setup.exe macos-arm64.dmg macos-x64.dmg; do
+            test -s "clash-node-pilot-v$version-$name.build.json"
+          done
+          sha256sum --check *.sha256
+          cd ..
+          gh release create "$RELEASE_TAG" release-assets/* --verify-tag --title "Clash Node Pilot $RELEASE_TAG" --notes-file RELEASE_NOTES.md --latest

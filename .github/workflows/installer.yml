@@ -10,7 +10,7 @@ on:
       - '.github/workflows/installer.yml'
       - 'package.json'
   push:
-    branches: [main, 'codex/windows-installer-delivery']
+    branches: [main, 'codex/**']
     paths:
       - 'packaging/windows/**'
       - 'scripts/*installer*'

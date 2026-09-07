@@ -13,6 +13,7 @@ process.env.HOME = sandbox;
 process.env.CLASH_PILOT_STATE = path.join(sandbox, 'state.json');
 process.env.CLASH_PILOT_DISABLE_AUTO_LOOP = '1';
 process.env.PORT = '0';
+process.env.CLASH_PILOT_INSTANCE = 'launcher-test-instance';
 
 const { server } = require('../server');
 const { isAllowedHostHeader, isSameLocalOrigin, normalizeControllerUrl, normalizeProbeUrl } = require('../src/core/security');
@@ -75,6 +76,7 @@ test('local HTTP API rejects hostile request boundaries before routing', async (
   try {
     const ok = await request(port);
     assert.equal(ok.status, 200);
+    assert.equal(JSON.parse(ok.body).instance, 'launcher-test-instance');
     assert.equal(ok.headers['x-content-type-options'], 'nosniff');
     const missingSession = await fetch(`http://127.0.0.1:${port}/api/diagnostics`);
     assert.equal(missingSession.status, 403);

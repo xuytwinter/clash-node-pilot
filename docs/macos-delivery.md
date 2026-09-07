@@ -1,49 +1,46 @@
-# macOS Delivery Plan
+# macOS Application
 
-[Delivery roadmap](ROADMAP.md) | [Project overview](../README.md)
+[Roadmap](ROADMAP.md) | [Project overview](../README.md)
 
-macOS delivery is planned work. The current supported release has no macOS application or DMG package, and this audit provides no real-Mac acceptance evidence. No delivery date is promised. The first target is an Apple Silicon preview; Intel requires separate packaging and acceptance before it is listed as supported.
+Version 0.4.0 provides a native AppKit menu-bar launcher and local-browser dashboard inside architecture-specific DMGs. Node.js is bundled. macOS 13 is the deployment target; automated application acceptance runs on macOS 15 for Apple Silicon and Intel separately.
 
-## Source Audit
+## Install
 
-The reusable prototype is `origin/codex/macos-android-expansion-879c` at commit `6957326660045a6b9ee566e3eb663bd79d7244a4`, resolved with `git rev-parse`. The audit inspected source only: it did not build, install or run a macOS artifact.
+1. Obtain the `macos-arm64.dmg` for Apple Silicon or `macos-x64.dmg` for Intel, plus its `.sha256`, from [Releases](https://github.com/xuytwinter/clash-node-pilot/releases).
+2. In the download directory, verify with `shasum -a 256 -c <download-name>.dmg.sha256`.
+3. Mount the DMG and drag **Clash Node Pilot.app** to Applications. Eject the disk image before launching the installed copy.
+4. Open the app. The dashboard opens in your default browser. The **CN** menu-bar item provides **Open Dashboard**, **Choose Controller Config**, and **Quit**.
 
-That branch contains macOS configuration candidates, a LaunchAgent adapter, a Keychain wrapper and scripts that assemble Apple Silicon and Intel portable ZIPs. It does not contain an application bundle, a DMG build or a native application launcher.
+The application is ad-hoc signed, without Developer ID or Apple notarization. A downloaded app may be blocked by Gatekeeper. After verifying the source and checksum, use macOS **System Settings > Privacy & Security > Open Anyway** if macOS offers it. Managed devices may prohibit this. Do not disable Gatekeeper globally. This workflow has not been accepted on a physical user Mac.
 
-The branch must not be merged wholesale. Its older server predates the current session authorization, job coordination and state-recovery behavior; its persistence code suppresses save failures. It also contains Android work outside this milestone. Selected components need adaptation to the current server and tests.
+## Controller and State
 
-## Implementation Sequence
+Pilot manages an existing local Clash/Mihomo external controller; it does not install a VPN or create subscriptions. Automatic discovery checks common Clash Verge Rev, Nyanpasu and ClashX-style configuration locations, but these are candidates, not verified client-version support claims. When discovery fails, choose the running client's YAML containing `external-controller` and `secret` through the menu. Only the selected path is stored in application preferences; the client file is read, not rewritten.
 
-Platform foundation is implemented on the macOS preview branch: macOS state uses `~/Library/Application Support/ClashNodePilot`, explicit state/config overrides remain supported, configuration discovery uses macOS candidates, and Windows WebView/v2rayN process discovery is excluded on macOS. These candidates are not verified client-version support claims. The native launcher and DMG build remain unimplemented; no macOS download is published.
+State defaults to `~/Library/Application Support/ClashNodePilot/state.json`. Back up this file and its `.bak` before upgrades. Application removal retains external state and preferences. Explicit `CLASH_PILOT_STATE`, `CLASH_CONFIG` and `PORT` environment overrides remain available when invoking the bundle executable from a terminal. Finder launches do not inherit shell profile variables.
 
-| Files | Reuse and required work |
-| --- | --- |
-| `release-macos.sh` | Reuse official Node archive downloads, SHA256 verification and license inclusion. Generate an `.app` containing the matching runtime, then a DMG on macOS. Record runtime version, architecture and source commit; validate executable permissions and deployment target. |
-| New macOS launcher and `Info.plist` | Define bundle identity and version. Start the bundled service, wait for its health endpoint, and open the local dashboard. Handle repeated launch, occupied ports and quit using explicit process ownership. The prototype `.command` only runs Node in a terminal. |
-| `server.js`, `src/platform/index.js` | Integrate platform adapters while retaining current API sessions, diagnostics, cancellation and verified selector writes. Store macOS state under `~/Library/Application Support/ClashNodePilot`, retaining explicit state-path overrides. Keep Windows discovery behavior intact. |
-| `src/platform/macos.js` | Reuse client configuration candidates and XML escaping. Resolve home paths at runtime and verify candidates against actual client versions and active controller configuration. Keep an explicit configuration option when discovery fails. |
-| `src/platform/macos.js`, launcher | Redesign LaunchAgent ownership before enabling login startup. Verify loaded state instead of relying on plist existence. Avoid a second service competing for the same port, and avoid stopping the API process before a startup-disable operation has finished. |
-| `src/platform/secure-store.js` | Reuse the Keychain account model. Distinguish missing credentials from locked Keychain, denied access and timeout. Preserve secret bytes instead of trimming them. Prefer a native Security.framework bridge that does not pass secrets in command-line arguments. |
-| `server.js`, `src/core/state.js`, `public/app.js` | If manual pairing is included, add authenticated API and UI support, validate local controller URLs, and persist only pairing metadata. Coordinate metadata and Keychain changes so failure does not leave inconsistent records. The current state schema does not retain prototype pairing fields. |
-| macOS CI and release workflows | Build and inspect DMGs on macOS; exercise the packaged application and runtime. Publish architecture-specific checksums and accurate signing status only after the relevant gates pass. |
+```sh
+PORT=43210 CLASH_CONFIG="$HOME/path/to/config.yaml" \
+  "/Applications/Clash Node Pilot.app/Contents/MacOS/ClashNodePilot"
+```
 
-The prototype LaunchAgent uses unconditional `KeepAlive` and starts Node directly. Copying this behavior would make quit semantics ambiguous and could restart a service after the application exits. Process ownership must be settled before login startup is offered.
+Default port is 3210. An occupied port is rejected; Pilot does not stop the occupying application. Reopening an already-running bundle opens its dashboard. Closing the browser keeps the service running. **Quit** terminates only the launcher's child service, with a bounded wait. Quit before replacing the application. Login startup, automatic updates and Keychain pairing are not implemented.
 
-The PowerShell ZIP builder is not the macOS distribution path. A Windows-created archive cannot establish macOS executable permissions, application signing or DMG behavior. The prototype CI starts only the runtime matching its runner architecture; checking both archives exist is not evidence that both architectures run.
+## Build and Acceptance
 
-## Acceptance Checklist
+On a clean macOS checkout with Node.js 22 and Xcode Command Line Tools:
 
-Keep results separate for Apple Silicon and Intel. Record the artifact checksum, source commit, Mac model, CPU architecture, macOS version and controller-client version with each device run.
+```sh
+bash scripts/build-macos.sh
+bash scripts/smoke-macos.sh
+```
 
-- [ ] DMG mounts and the application copies to Applications; the payload contains the expected runtime, licenses and source metadata, with no user state or secrets.
-- [ ] First launch works from Finder without a preinstalled Node runtime; the UI reaches the authenticated local API. Paths containing spaces and non-ASCII characters work.
-- [ ] Repeated launch reuses the owned service. An unrelated process on the desired port produces an actionable error rather than being stopped or mistaken for Pilot.
-- [ ] Quit releases the owned process and listening port. Closing the browser, quitting the launcher and enabling login startup have documented, distinct behavior.
-- [ ] Client discovery is verified against actual supported client versions. Explicit configuration and any manual pairing work when automatic discovery does not.
-- [ ] Keychain save, read and removal work; denied access, locked Keychain and failed metadata writes produce recoverable errors. API responses and diagnostics omit secrets.
-- [ ] Optional LaunchAgent enable, disable and next-login behavior work without duplicate processes or stale paths. Failed installation restores the previous state.
-- [ ] Upgrade and rollback retain compatible user state. Removing the application has explicit behavior for login startup and stored credentials.
-- [ ] Packaged fake-controller checks cover session rejection, diagnostics export, selector readback and shutdown. Core Node CI is reported separately from application and device tests.
-- [ ] Developer ID signing, notarization and Gatekeeper results are recorded accurately. Unsigned or unnotarized previews are labeled accordingly; no general-release compatibility claim precedes real-device acceptance.
+`ARCH=arm64` or `ARCH=x64` must match the runner. Builds verify the official Node archive checksum, package tracked application files, embed source/runtime metadata, ad-hoc sign the bundle, verify its signature and create a DMG with checksum and build manifest. Existing outputs are not overwritten.
 
-These gates define the work needed for a preview. A generated DMG, passing core tests or a successful CI runtime check alone does not complete macOS delivery.
+[Application acceptance workflow](https://github.com/xuytwinter/clash-node-pilot/actions/workflows/macos.yml) builds on both architectures. Release publication requires both Mac jobs and Windows package acceptance. Core Node tests are separate from packaged application checks.
+
+Remaining acceptance: physical-device Finder/Gatekeeper behavior, real controller-client versions, full configuration-picker interaction, macOS 13/14 and newer-version coverage, cross-version upgrade/rollback, Developer ID signing and notarization. Runner checks do not close these items. Report macOS version, CPU, release checksum and client version when filing a compatibility issue.
+
+## Design History
+
+The older `codex/macos-android-expansion-879c` prototype provided portable ZIP concepts, but predates current API sessions and persistence protection. Its LaunchAgent and Keychain wrappers were not imported. Current native application work retains the current server's authenticated API, job coordination, diagnostics and verified selector writes.
