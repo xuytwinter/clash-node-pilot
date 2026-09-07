@@ -53,6 +53,7 @@ const
   OwnershipMarker = '.clash-node-pilot-install';
   OwnershipValue = '6E17E88E-073F-4827-9377-49523373F319';
   FileAttributeReparsePoint = $400;
+  FileAttributeDirectory = $10;
 
 function GetFileAttributesW(FileName: String): LongWord;
   external 'GetFileAttributesW@kernel32.dll stdcall';
@@ -60,6 +61,33 @@ function GetFileAttributesW(FileName: String): LongWord;
 function IntegrationEnabled: Boolean;
 begin
   Result := ExpandConstant('{param:NOINTEGRATION|0}') <> '1';
+end;
+
+function FindNestedReparsePoint(Directory: String): String;
+var
+  Found: TFindRec;
+  Child: String;
+begin
+  Result := '';
+  if not FindFirst(AddBackslash(Directory) + '*', Found) then Exit;
+  try
+    repeat
+      if (Found.Name <> '.') and (Found.Name <> '..') then begin
+        Child := AddBackslash(Directory) + Found.Name;
+        // Check the entry itself before considering recursion into its target.
+        if (Found.Attributes and FileAttributeReparsePoint) <> 0 then begin
+          Result := Child;
+          Exit;
+        end;
+        if (Found.Attributes and FileAttributeDirectory) <> 0 then begin
+          Result := FindNestedReparsePoint(Child);
+          if Result <> '' then Exit;
+        end;
+      end;
+    until not FindNext(Found);
+  finally
+    FindClose(Found);
+  end;
 end;
 
 function ValidateDestination(Directory: String): String;
@@ -82,6 +110,13 @@ begin
       Exit;
     end;
     Current := ExtractFileDir(Current);
+  end;
+  if DirExists(Directory) then begin
+    Current := FindNestedReparsePoint(Directory);
+    if Current <> '' then begin
+      Result := 'The existing installation contains a symbolic link or junction: ' + Current + '. Remove the link before installing.';
+      Exit;
+    end;
   end;
   if DirExists(Directory) and FindFirst(AddBackslash(Directory) + '*', Found) then begin
     try

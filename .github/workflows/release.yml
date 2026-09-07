@@ -144,6 +144,8 @@ jobs:
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 -SetupPath "outputs/clash-node-pilot-v$version-windows-x64-setup.exe"
           if ($LASTEXITCODE -ne 0) { throw 'Windows installer acceptance failed' }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 -SetupPath "outputs/clash-node-pilot-v$version-windows-x64-setup.exe" -VerifyIntegration
+          if ($LASTEXITCODE -ne 0) { throw 'Windows installer desktop integration failed' }
 
       - uses: actions/upload-artifact@v4
         with:
