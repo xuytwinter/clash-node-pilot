@@ -1292,7 +1292,7 @@ async function apiHandler(req, res, url) {
   sendJson(res, 404, { error: 'Not found' });
 }
 
-const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png' };
 async function staticHandler(res, url) {
   const relative = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname.slice(1));
   const file = path.resolve(STATIC_ROOT, relative);
