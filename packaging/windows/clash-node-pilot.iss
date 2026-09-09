@@ -27,6 +27,7 @@ OutputBaseFilename=clash-node-pilot-v{#AppVersion}-windows-x64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\icons\clash-node-pilot.ico
 DisableProgramGroupPage=yes
 CreateUninstallRegKey=IntegrationEnabled
 UsePreviousAppDir=IntegrationEnabled
@@ -42,11 +43,12 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked;
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "stop-pilot.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\icons\clash-node-pilot.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{userprograms}\Clash Node Pilot"; Filename: "{app}\start-clash-node-pilot.cmd"; WorkingDir: "{app}"; Check: IntegrationEnabled
+Name: "{userprograms}\Clash Node Pilot"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\start-clash-node-pilot.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\clash-node-pilot.ico"; Check: IntegrationEnabled
 Name: "{userprograms}\Stop Clash Node Pilot"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\stop-pilot.ps1"""; WorkingDir: "{app}"; Check: IntegrationEnabled
-Name: "{userdesktop}\Clash Node Pilot"; Filename: "{app}\start-clash-node-pilot.cmd"; WorkingDir: "{app}"; Tasks: desktopicon; Check: IntegrationEnabled
+Name: "{userdesktop}\Clash Node Pilot"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\start-clash-node-pilot.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\clash-node-pilot.ico"; Tasks: desktopicon; Check: IntegrationEnabled
 
 [Code]
 const

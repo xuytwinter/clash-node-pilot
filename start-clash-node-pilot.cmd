@@ -1,5 +1,5 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-pilot.ps1"
+wscript.exe "%~dp0start-clash-node-pilot.vbs"
 exit /b %errorlevel%

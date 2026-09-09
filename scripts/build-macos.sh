@@ -71,6 +71,9 @@ APP_DIR="$BUILD_DIR/$APP_NAME"
 APP_CONTENTS="$APP_DIR/Contents"
 APP_ROOT="$APP_CONTENTS/Resources/app"
 mkdir -p "$APP_CONTENTS/MacOS" "$APP_ROOT/runtime" "$APP_CONTENTS/Resources"
+ICON_SOURCE="$ROOT/packaging/icons/ClashNodePilot.icns"
+[[ -f "$ICON_SOURCE" ]] || { echo "Missing app icon: $ICON_SOURCE (run scripts/generate-icons.py)" >&2; exit 1; }
+cp "$ICON_SOURCE" "$APP_CONTENTS/Resources/ClashNodePilot.icns"
 tar -xzf "$NODE_DOWNLOAD" -C "$BUILD_DIR"
 cp "$BUILD_DIR/$NODE_BASE/bin/node" "$APP_ROOT/runtime/node"
 chmod 755 "$APP_ROOT/runtime/node"
@@ -87,7 +90,7 @@ EOF
 
 # Keep this list explicit. In particular, test fixtures, outputs and private
 # runtime state must never become part of a release application.
-git archive HEAD package.json README.md README.zh-CN.md LICENSE CHANGELOG.md SECURITY.md RELEASE_NOTES.md server.js regions.json src public docs scripts/benchmark.js scripts/demo.js | tar -xf - -C "$APP_ROOT"
+git archive HEAD package.json README.md README.zh-CN.md LICENSE CHANGELOG.md SECURITY.md RELEASE_NOTES.md server.js regions.json src public docs scripts/benchmark.js scripts/demo.js packaging/icons/README.md packaging/icons/ClashNodePilot.icns | tar -xf - -C "$APP_ROOT"
 
 LAUNCHER_SOURCE="$ROOT/packaging/macos/ClashNodePilot.swift"
 PLIST_SOURCE="$ROOT/packaging/macos/Info.plist.in"

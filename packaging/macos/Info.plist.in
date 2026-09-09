@@ -8,6 +8,7 @@
   <key>CFBundleVersion</key><string>$(VERSION)</string>
   <key>CFBundleShortVersionString</key><string>$(VERSION)</string>
   <key>CFBundleExecutable</key><string>ClashNodePilot</string>
+  <key>CFBundleIconFile</key><string>ClashNodePilot.icns</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>LSUIElement</key><true/>

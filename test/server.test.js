@@ -97,10 +97,13 @@ test('legacy repository state migrates once without deleting the old file', () =
 test('Windows launch scripts prefer bundled runtime and keep PATH fallback', () => {
   const root = path.join(__dirname, '..');
   const startCmd = fs.readFileSync(path.join(root, 'start-clash-node-pilot.cmd'), 'utf8');
+  const startVbs = fs.readFileSync(path.join(root, 'start-clash-node-pilot.vbs'), 'utf8');
   const watchdog = fs.readFileSync(path.join(root, 'startup-watchdog.ps1'), 'utf8');
   const install = fs.readFileSync(path.join(root, 'install-autostart.ps1'), 'utf8');
   const release = fs.readFileSync(path.join(root, 'release.ps1'), 'utf8');
-  assert.match(startCmd, /-File "%~dp0start-pilot\.ps1"/);
+  assert.match(startCmd, /wscript\.exe "%~dp0start-clash-node-pilot\.vbs"/i);
+  assert.match(startCmd, /wscript\.exe/i);
+  assert.match(startVbs, /shell\.Run command, 0, False/i);
   const launcher = fs.readFileSync(path.join(root, 'start-pilot.ps1'), 'utf8');
   assert.match(launcher, /startup-watchdog\.ps1/);
   assert.match(launcher, /LASTEXITCODE/);

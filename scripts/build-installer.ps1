@@ -73,7 +73,7 @@ if ($ExpectedSourceSha -and $build.sourceSha -ne $ExpectedSourceSha) { throw 'Po
 $sourcePackage = & git -C $root show "$($build.sourceSha):package.json"
 if ($LASTEXITCODE -ne 0) { throw 'Portable source commit is not available locally; fetch its history first' }
 if (($sourcePackage | ConvertFrom-Json).version -ne $version) { throw 'Source commit package version mismatch' }
-foreach ($file in @('runtime\node.exe', 'runtime\NODE-LICENSE', 'runtime\NODE-RUNTIME.txt', 'server.js', 'start-clash-node-pilot.cmd', 'start-pilot.ps1', 'startup-watchdog.ps1', 'windows-common.ps1', 'public\index.html', 'src\core\security.js', 'src\core\state.js')) {
+foreach ($file in @('runtime\node.exe', 'runtime\NODE-LICENSE', 'runtime\NODE-RUNTIME.txt', 'server.js', 'start-clash-node-pilot.cmd', 'start-clash-node-pilot.vbs', 'start-pilot.ps1', 'startup-watchdog.ps1', 'windows-common.ps1', 'public\index.html', 'src\core\security.js', 'src\core\state.js')) {
   if (-not (Test-Path -LiteralPath (Join-Path $payload $file) -PathType Leaf)) { throw "Missing payload file: $file" }
 }
 foreach ($item in Get-ChildItem -LiteralPath $payload -Recurse -Force) {
@@ -107,9 +107,10 @@ if (-not $engineLine) { throw 'Compiler did not report its engine version' }
 $compilerVersion = $engineLine.Matches[0].Groups[1].Value.Trim() -replace '^Inno Setup ', ''
 if ($compilerVersion -ne '6.7.3') { throw "Expected Inno Setup 6.7.3, found $compilerVersion" }
 if (-not (Test-Path -LiteralPath $setup)) { throw 'Installer output missing' }
+$signing = & (Join-Path $PSScriptRoot 'sign-windows.ps1') -Path $setup
 $setupHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
 "$setupHash  $([IO.Path]::GetFileName($setup))" | Set-Content -LiteralPath "$setup.sha256" -Encoding ASCII
-@{ version=$version; portableSha256=$zipHash.ToLowerInvariant(); sourceSha=$build.sourceSha; installerSourceSha=$installerSourceSha; installerWorkingTree=$(if ($installerStatus) { 'dirty' } else { 'clean' }); installerSourceStatus=@($installerStatus); compilerVersion=$compilerVersion; signed=$false } |
+@{ version=$version; portableSha256=$zipHash.ToLowerInvariant(); sourceSha=$build.sourceSha; installerSourceSha=$installerSourceSha; installerWorkingTree=$(if ($installerStatus) { 'dirty' } else { 'clean' }); installerSourceStatus=@($installerStatus); compilerVersion=$compilerVersion; signed=$signing.signed; signatureStatus=$signing.signatureStatus; signer=$signing.signer; timestamped=$signing.timestamped } |
   ConvertTo-Json | Set-Content -LiteralPath "$setup.build.json" -Encoding UTF8
-Write-Host "Created unsigned installer: $setup"
+Write-Host "Created installer (signature: $($signing.signatureStatus)): $setup"
 Write-Host "Preserved isolated build staging: $stage"
