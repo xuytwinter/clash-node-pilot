@@ -1,6 +1,13 @@
-# Clash Node Pilot
-
-[中文](README.zh-CN.md) | [Delivery roadmap / 路线图](docs/ROADMAP.md)
+<p align="center">
+  <img src="packaging/icons/cat-sunglasses.png" alt="Clash Node Pilot — sunglasses cat" width="128" height="128">
+</p>
+<h1 align="center">Clash Node Pilot</h1>
+<p align="center">A local dashboard for Clash/Mihomo node health and selection.</p>
+<p align="center"><a href="README.zh-CN.md">中文</a> · <a href="https://github.com/xuytwinter/clash-node-pilot/releases/latest">Download</a> · <a href="docs/ROADMAP.md">Roadmap</a> · <a href="packaging/icons/README.md">Icon</a></p>
+<p align="center">
+  <a href="https://github.com/xuytwinter/clash-node-pilot/releases/latest"><img src="https://img.shields.io/github/v/release/xuytwinter/clash-node-pilot" alt="Latest release"></a>
+  <a href="https://github.com/xuytwinter/clash-node-pilot/actions/workflows/ci.yml"><img src="https://github.com/xuytwinter/clash-node-pilot/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+</p>
 
 Clash Node Pilot is a local Windows and macOS dashboard for testing and switching Clash/Mihomo selector nodes by region and health score. It talks to the Mihomo external controller on the same machine, keeps controller secrets on the Node.js backend, and sends selector changes with PUT, then reads the controller state back and reports success only when the requested selection is confirmed.
 
@@ -20,7 +27,7 @@ No Linux desktop, Android, iOS, Electron, browser extension, or ChatGPT/OpenAI i
 
 ## Quick Start
 
-Version 0.4.0 provides Windows `Setup.exe` and portable ZIP, plus macOS `arm64.dmg` and `x64.dmg`. Choose the Windows installer for Start Menu launch/stop shortcuts; see the [installer guide](docs/windows-installer.md). On Mac, mount the matching DMG, drag the application to Applications and launch it; **CN > Quit** stops its service. See the [Mac guide](docs/macos-delivery.md) for controller selection and Gatekeeper limitations. Published assets and checksums are listed in [Releases](https://github.com/xuytwinter/clash-node-pilot/releases).
+Version 0.4.1 provides Windows `Setup.exe` and portable ZIP, plus macOS `arm64.dmg` and `x64.dmg`. Choose the Windows installer for Start Menu launch/stop shortcuts; see the [installer guide](docs/windows-installer.md). On Mac, mount the matching DMG, drag the application to Applications and launch it; **CN > Quit** stops its service. See the [Mac guide](docs/macos-delivery.md) for controller selection and Gatekeeper limitations. Published assets and checksums are listed in [Releases](https://github.com/xuytwinter/clash-node-pilot/releases).
 
 1. For Windows portable use, obtain `clash-node-pilot-v0.4.1-windows-x64-portable.zip` and its checksum from [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases). Only tagged releases provide published assets.
 2. Extract it to any local folder, including paths with spaces or Chinese characters.

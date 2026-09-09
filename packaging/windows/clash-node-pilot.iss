@@ -41,6 +41,7 @@ SetupLogging=yes
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked; Check: IntegrationEnabled
 
 [Files]
+Source: "stop-pilot.ps1"; Flags: dontcopy
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "stop-pilot.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\icons\clash-node-pilot.ico"; DestDir: "{app}"; Flags: ignoreversion
@@ -166,10 +167,22 @@ begin
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ExitCode: Integer;
 begin
   Result := ValidateDestination(ExpandConstant('{app}'));
-  if (Result = '') and RuntimeInUse(ExpandConstant('{app}')) then
-    Result := 'Node Pilot is running from this installation. Close it yourself and retry. Setup will not stop processes.';
+  if (Result = '') and RuntimeInUse(ExpandConstant('{app}')) then begin
+    ExtractTemporaryFile('stop-pilot.ps1');
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\stop-pilot.ps1') +
+      '" -InstallDirectory "' + RemoveBackslashUnlessRoot(ExpandConstant('{app}')) + '"',
+      '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then begin
+      Result := 'Could not stop Node Pilot for the update. Close it and retry.';
+      Exit;
+    end;
+    if (ExitCode <> 0) or RuntimeInUse(ExpandConstant('{app}')) then
+      Result := 'A process is still using this installation. Close it and retry. Your settings have been preserved.';
+  end;
 end;
 
 function InitializeUninstall: Boolean;

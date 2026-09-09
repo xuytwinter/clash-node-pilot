@@ -283,22 +283,24 @@ function startupStatus() {
   if (process.platform !== 'win32') return { supported: false, enabled: false, source: null };
   try {
     execFileSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Clash Node Pilot Startup'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
-    execFileSync('reg.exe', ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'Clash Node Pilot Optimizer'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
     return { supported: true, enabled: true, source: 'current-user' };
   } catch { /* check elevated scheduled tasks next */ }
-  try {
-    execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot Startup'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
-    execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot Watchdog'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
-    execFileSync('schtasks.exe', ['/Query', '/TN', 'Clash Node Pilot Optimizer'], { stdio: 'ignore', timeout: 1500, windowsHide: true });
-    return { supported: true, enabled: true, source: 'scheduled-task' };
-  } catch { return { supported: true, enabled: false, source: null }; }
+  for (const name of ['Clash Node Pilot Startup', 'Clash Node Pilot Watchdog', 'Clash Node Pilot Optimizer']) {
+    try {
+      const xml = execFileSync('schtasks.exe', ['/Query', '/TN', name, '/XML'], { encoding: 'utf8', timeout: 1500, windowsHide: true });
+      const settings = xml.match(/<Settings\b[^>]*>([\s\S]*?)<\/Settings>/i)?.[1];
+      if (settings && /<Enabled>\s*true\s*<\/Enabled>/i.test(settings))
+        return { supported: true, enabled: true, source: 'scheduled-task' };
+    } catch { /* absent or inaccessible task */ }
+  }
+  return { supported: true, enabled: false, source: null };
 }
 
 function setStartupEnabled(enabled) {
   if (OS_INTEGRATION_DISABLED) throw Object.assign(new Error('Startup management is disabled in demo mode'), { status: 403, code: 'startup-disabled' });
   if (process.platform !== 'win32') throw new Error('Startup management is currently available on Windows only');
   const current = startupStatus();
-  if (!enabled && current.source === 'scheduled-task') throw new Error('当前使用管理员恢复任务，请以管理员身份运行 uninstall-autostart.ps1 关闭');
+  if (!enabled && current.source === 'scheduled-task') throw Object.assign(new Error('关闭管理员创建的自启动任务需要管理员权限，请以管理员身份运行 uninstall-autostart.ps1。'), { status: 409, code: 'startup-admin-required' });
   const script = path.join(__dirname, enabled ? 'install-pilot-autostart.ps1' : 'uninstall-pilot-autostart.ps1');
   execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], { stdio: 'ignore', timeout: 10000, windowsHide: true });
   return startupStatus();

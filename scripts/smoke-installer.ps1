@@ -362,6 +362,21 @@ try {
   $ownedProcess.WaitForExit()
   $ownedProcess = $null
 
+  $phase = 'automatic-running-upgrade'
+  foreach ($key in $environment.Keys) { [Environment]::SetEnvironmentVariable($key, $environment[$key], 'Process') }
+  try {
+    $appProcess = Start-Process -FilePath $node -ArgumentList "`"$(Join-Path $app 'server.js')`"" -WindowStyle Hidden -PassThru
+    Start-Sleep -Seconds 1
+    Assert-Check (-not $appProcess.HasExited) 'Real server is running before automatic upgrade.'
+    $code = Invoke-Installer $setup ($installArgs + "/LOG=`"$(Join-Path $root 'automatic-upgrade.log')`"")
+    Assert-Check ($code -eq 0) 'Installer automatically stopped its server and updated successfully.'
+    Assert-Check ($appProcess.WaitForExit(10000)) 'Automatic upgrade stopped the old server.'
+    Assert-Check ([IO.File]::ReadAllText($state) -ceq $stateBytes) 'Automatic upgrade preserved user state.'
+    $appProcess = $null
+  } finally {
+    foreach ($key in $previousEnvironment.Keys) { [Environment]::SetEnvironmentVariable($key, $previousEnvironment[$key], 'Process') }
+  }
+
   $phase = 'uninstall'
   $code = Invoke-Installer (Join-Path $app 'unins000.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$(Join-Path $root 'uninstall.log')`"")
   Assert-Check ($code -eq 0) 'Isolated real uninstaller completed.'

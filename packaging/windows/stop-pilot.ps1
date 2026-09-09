@@ -1,6 +1,7 @@
+param([string]$InstallDirectory = $PSScriptRoot)
 $ErrorActionPreference = 'Stop'
-$node = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'runtime\node.exe'))
-$server = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'server.js'))
+$node = [IO.Path]::GetFullPath((Join-Path $InstallDirectory 'runtime\node.exe'))
+$server = [IO.Path]::GetFullPath((Join-Path $InstallDirectory 'server.js'))
 $stopped = 0
 foreach ($candidate in Get-CimInstance Win32_Process -Filter "Name = 'node.exe'") {
   if ($candidate.ExecutablePath -ne $node) { continue }
@@ -14,6 +15,7 @@ foreach ($candidate in Get-CimInstance Win32_Process -Filter "Name = 'node.exe'"
   $current = Get-CimInstance Win32_Process -Filter "ProcessId = $($candidate.ProcessId)"
   if (-not $current -or $current.CreationDate -ne $candidate.CreationDate -or $current.CommandLine -ne $command) { continue }
   Stop-Process -InputObject $process
+  if (-not $process.WaitForExit(10000)) { throw 'Node Pilot did not stop within 10 seconds.' }
   $stopped++
 }
 Write-Host "Stopped $stopped Node Pilot instance(s) from this installation."

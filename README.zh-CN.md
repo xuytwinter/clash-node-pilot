@@ -1,6 +1,13 @@
-# Clash Node Pilot
-
-[English](README.md) | [交付路线图](docs/ROADMAP.md)
+<p align="center">
+  <img src="packaging/icons/cat-sunglasses.png" alt="Clash Node Pilot — sunglasses cat" width="128" height="128">
+</p>
+<h1 align="center">Clash Node Pilot</h1>
+<p align="center">运行在本机的 Clash/Mihomo 节点健康监测与优选控制台。</p>
+<p align="center"><a href="README.md">English</a> · <a href="https://github.com/xuytwinter/clash-node-pilot/releases/latest">下载安装包</a> · <a href="docs/ROADMAP.md">路线图</a> · <a href="packaging/icons/README.md">图标使用</a></p>
+<p align="center">
+  <a href="https://github.com/xuytwinter/clash-node-pilot/releases/latest"><img src="https://img.shields.io/github/v/release/xuytwinter/clash-node-pilot" alt="Latest release"></a>
+  <a href="https://github.com/xuytwinter/clash-node-pilot/actions/workflows/ci.yml"><img src="https://github.com/xuytwinter/clash-node-pilot/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+</p>
 
 Clash Node Pilot 是一个运行在 Windows 和 macOS 本机的 Clash/Mihomo 节点优选控制台。它只监听 `127.0.0.1`，通过本机 Mihomo external controller 读取代理组、测速并切换 `Selector`，Controller secret 只保留在本地 Node.js 后端，不返回浏览器、不写入日志、不写入发布说明。
 
@@ -20,7 +27,7 @@ Clash Node Pilot 是一个运行在 Windows 和 macOS 本机的 Clash/Mihomo 节
 
 ## 快速开始
 
-0.4.0 提供 Windows `Setup.exe`、便携 ZIP，以及 Mac `arm64.dmg`（Apple Silicon）和 `x64.dmg`（Intel）。Windows 安装版包含开始菜单启动与停止入口，详见[安装程序说明](docs/windows-installer.md)。Mac 挂载对应 DMG，将应用拖到 Applications 后打开，使用菜单栏 **CN > Quit** 停止服务；配置选择与 Gatekeeper 限制见 [Mac 指南](docs/macos-delivery.md)。正式附件与校验文件见 [Releases](https://github.com/xuytwinter/clash-node-pilot/releases)。
+0.4.1 提供 Windows `Setup.exe`、便携 ZIP，以及 Mac `arm64.dmg`（Apple Silicon）和 `x64.dmg`（Intel）。Windows 安装版包含开始菜单启动与停止入口，详见[安装程序说明](docs/windows-installer.md)。Mac 挂载对应 DMG，将应用拖到 Applications 后打开，使用菜单栏 **CN > Quit** 停止服务；配置选择与 Gatekeeper 限制见 [Mac 指南](docs/macos-delivery.md)。正式附件与校验文件见 [Releases](https://github.com/xuytwinter/clash-node-pilot/releases)。
 
 1. 使用 Windows 便携版时，从 [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases) 获取 `clash-node-pilot-v0.4.1-windows-x64-portable.zip` 及校验文件。发布产物以已打标签的 Release 为准。
 2. 解压到任意本地目录，支持空格和中文路径。
