@@ -1,4 +1,15 @@
-# Clash Node Pilot v0.4.1
+# Clash Node Pilot v0.4.2
+
+## v0.4.2 update
+
+- Windows Setup automatically stops its own installed server before updating, preserving settings and unrelated processes. Reopen the application after updating.
+- Disabled scheduled tasks no longer appear as enabled startup; the current single Run entry is detected correctly.
+- Administrator startup permission errors are no longer reported as Clash Verge connection failures.
+- Both READMEs now display the sunglasses-cat icon and release navigation.
+
+Legacy source-checkout administrator tasks are not automatically migrated. If they occupy port 3210, disable the old Startup, Watchdog and Optimizer tasks with administrator privileges, then stop the verified old server.
+
+The following v0.4.1 features and signing limitations also apply to v0.4.2. Download filenames use v0.4.2 for this release.
 
 Fix Windows desktop startup and adopt the sunglasses-cat icon across installers, shortcuts, macOS bundles and the browser tab.
 
@@ -14,10 +25,10 @@ Fix Windows desktop startup and adopt the sunglasses-cat icon across installers,
 
 | System | Package |
 | --- | --- |
-| Windows 10/11 x64 | `clash-node-pilot-v0.4.1-windows-x64-setup.exe` |
-| Windows x64 portable | `clash-node-pilot-v0.4.1-windows-x64-portable.zip` |
-| macOS 13+ Apple Silicon | `clash-node-pilot-v0.4.1-macos-arm64.dmg` |
-| macOS 13+ Intel | `clash-node-pilot-v0.4.1-macos-x64.dmg` |
+| Windows 10/11 x64 | `clash-node-pilot-v0.4.2-windows-x64-setup.exe` |
+| Windows x64 portable | `clash-node-pilot-v0.4.2-windows-x64-portable.zip` |
+| macOS 13+ Apple Silicon | `clash-node-pilot-v0.4.2-macos-arm64.dmg` |
+| macOS 13+ Intel | `clash-node-pilot-v0.4.2-macos-x64.dmg` |
 
 All packages bundle Node.js 22.23.1 and include SHA256 checksums. Windows Setup and Mac DMGs have build provenance manifests. Stop the existing Pilot instance before upgrading and back up `state.json` plus `.bak`. Closing the browser does not stop the service.
 

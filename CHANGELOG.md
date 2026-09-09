@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2] - 2026-09-09
+
+- Stop the installed server automatically during Windows upgrades, preserving settings and unrelated processes.
+- Fix startup detection for disabled tasks and the single current-user startup entry.
+- Return specific administrator startup errors instead of controller connection errors.
+- Show the approved application icon and navigation in both READMEs.
+- Legacy administrator task migration remains manual.
+
 ## [0.4.1] - 2026-09-09
 
 - Hide the Windows desktop launch console and surface startup failures through a dialog and local log.
