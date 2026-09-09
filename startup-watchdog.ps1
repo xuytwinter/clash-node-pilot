@@ -23,6 +23,14 @@ if (Test-NodePilotHealth) {
   if (Test-NodePilot) { exit 0 }
   throw "Port $env:PORT is already serving a different local service. Stop it or choose another port."
 }
+# A listener that is not Node Pilot may not expose /api/health at all. Detect it
+# before spawning Node so the launcher reports the real cause instead of waiting
+# for a child that can never bind the requested port.
+$listeners = @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort ([int]$env:PORT) -State Listen -ErrorAction SilentlyContinue)
+if ($listeners.Count -gt 0) {
+  $owners = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
+  throw "Port $env:PORT is already in use by process $($owners -join ', '). Stop that process or choose another port."
+}
 if (-not (Test-Path -LiteralPath $serverPath)) { throw 'server.js not found.' }
 Start-Process -FilePath $nodeExe -ArgumentList "`"$serverPath`"" -WorkingDirectory $root -WindowStyle Hidden
 $deadline = (Get-Date).AddSeconds(15)

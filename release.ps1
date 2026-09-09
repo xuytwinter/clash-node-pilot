@@ -124,6 +124,7 @@ $items = @(
   'regions.json',
   'public',
   'start-clash-node-pilot.cmd',
+  'start-clash-node-pilot.vbs',
   'start-pilot.ps1',
   'windows-common.ps1',
   'install-pilot-autostart.ps1',

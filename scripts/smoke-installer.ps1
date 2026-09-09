@@ -227,7 +227,7 @@ try {
   $currentPackage = Get-Content -LiteralPath (Join-Path $app 'package.json') -Raw | ConvertFrom-Json
   Assert-Check ($currentPackage.version -eq $expectedVersion) "Current installer payload reports the expected v$expectedVersion version."
   if ($VerifyIntegration) {
-    Assert-Shortcut $launchLink (Join-Path $app 'start-clash-node-pilot.cmd') ''
+    Assert-Shortcut $launchLink (Join-Path $env:WINDIR 'System32\wscript.exe') "`"$(Join-Path $app 'start-clash-node-pilot.vbs')`""
     Assert-Shortcut $stopLink (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $app 'stop-pilot.ps1')`""
     Assert-Check (-not (Test-Path -LiteralPath $desktopLink)) 'Default installation did not create an optional desktop shortcut.'
     Assert-Check (Test-Path -LiteralPath $uninstallKey) 'Default installation registered a current-user uninstaller.'
@@ -251,7 +251,7 @@ try {
   $code = Invoke-Installer $setup ($installArgs + "/LOG=`"$(Join-Path $root 'reinstall.log')`"")
   Assert-Check ($code -eq 0) 'Same-version installation over an existing installation completed.'
   if ($VerifyIntegration) {
-    Assert-Shortcut $desktopLink (Join-Path $app 'start-clash-node-pilot.cmd') ''
+    Assert-Shortcut $desktopLink (Join-Path $env:WINDIR 'System32\wscript.exe') "`"$(Join-Path $app 'start-clash-node-pilot.vbs')`"
     Assert-Check ((Read-StartupSnapshot) -ceq $startupBefore) 'Optional desktop shortcut creation did not enable autostart.'
   }
   Assert-Check ([IO.File]::ReadAllText($state) -ceq $stateBytes) 'External user state survived reinstall unchanged.'
