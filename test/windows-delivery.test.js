@@ -45,7 +45,10 @@ test('Windows health survives controller disconnect without process changes', { 
         CommandLine = '"' + ${quote(path.join(dir, 'runtime', 'node.exe'))} + '" "' + ${quote(path.join(dir, 'server.js'))} + '"'
       }
     }
-    function Get-NetTCPConnection { [pscustomobject]@{ OwningProcess = 1234 } }
+    function Get-NetTCPConnection {
+      param($LocalAddress, $LocalPort, $State, $ErrorAction)
+      [pscustomobject]@{ LocalAddress = $LocalAddress; LocalPort = $LocalPort; State = $State; OwningProcess = 1234 }
+    }
     function Start-Process { throw 'Unexpected start' }
     function Stop-Process { throw 'Unexpected stop' }
     & ${quote(path.join(dir, 'startup-watchdog.ps1'))}
@@ -65,7 +68,10 @@ test('Windows watchdog adopts a healthy service only when its process owns this 
         CommandLine = '"' + ${quote(path.join(dir, 'runtime', 'node.exe'))} + '" "' + ${quote(path.join(dir, 'server.js'))} + '"'
       }
     }
-    function Get-NetTCPConnection { [pscustomobject]@{ OwningProcess = 1234 } }
+    function Get-NetTCPConnection {
+      param($LocalAddress, $LocalPort, $State, $ErrorAction)
+      [pscustomobject]@{ LocalAddress = $LocalAddress; LocalPort = $LocalPort; State = $State; OwningProcess = 1234 }
+    }
     function Start-Process { throw 'Unexpected start' }
     & ${quote(path.join(dir, 'startup-watchdog.ps1'))} -Port 43214
   `);
@@ -84,7 +90,10 @@ test('Windows watchdog rejects a healthy service owned by another installation',
         CommandLine = 'unrelated process'
       }
     }
-    function Get-NetTCPConnection { [pscustomobject]@{ OwningProcess = 9999 } }
+    function Get-NetTCPConnection {
+      param($LocalAddress, $LocalPort, $State, $ErrorAction)
+      [pscustomobject]@{ LocalAddress = $LocalAddress; LocalPort = $LocalPort; State = $State; OwningProcess = 9999 }
+    }
     function Start-Process { Set-Content -LiteralPath ${quote(started)} -Value 'started' }
     & ${quote(path.join(dir, 'startup-watchdog.ps1'))} -Port 43215
   `);
@@ -98,6 +107,7 @@ test('Windows watchdog quotes project path and uses bundled node and custom port
   const capture = path.join(dir, 'start.json');
   const result = powershell(`
     $global:probes = 0
+    $global:started = $false
     function Invoke-RestMethod {
       $global:probes++
       if ($global:probes -eq 1) { throw 'offline' }
@@ -105,6 +115,7 @@ test('Windows watchdog quotes project path and uses bundled node and custom port
     }
     function Start-Process {
       param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle)
+      $global:started = $true
       @{file=$FilePath; arguments=$ArgumentList; cwd=$WorkingDirectory; style=$WindowStyle; port=$env:PORT} |
         ConvertTo-Json | Set-Content -LiteralPath ${quote(capture)} -Encoding UTF8
     }
@@ -115,7 +126,12 @@ test('Windows watchdog quotes project path and uses bundled node and custom port
         CommandLine = '"' + ${quote(path.join(dir, 'runtime', 'node.exe'))} + '" "' + ${quote(path.join(dir, 'server.js'))} + '"'
       }
     }
-    function Get-NetTCPConnection { [pscustomobject]@{ OwningProcess = 1234 } }
+    function Get-NetTCPConnection {
+      param($LocalAddress, $LocalPort, $State, $ErrorAction)
+      if ($global:started) {
+        [pscustomobject]@{ LocalAddress = $LocalAddress; LocalPort = $LocalPort; State = $State; OwningProcess = 1234 }
+      } else { @() }
+    }
     function Stop-Process { throw 'Unexpected stop' }
     & ${quote(path.join(dir, 'startup-watchdog.ps1'))} -Port 43211
   `);
@@ -126,6 +142,23 @@ test('Windows watchdog quotes project path and uses bundled node and custom port
   assert.equal(start.cwd, dir);
   assert.equal(start.port, '43211');
   assert.equal(start.style, 'Hidden');
+});
+
+test('Windows watchdog rejects an occupied non-health HTTP port before spawning', { skip: !windows }, t => {
+  const dir = fixture(t);
+  const started = path.join(dir, 'started.txt');
+  const result = powershell(`
+    function Invoke-RestMethod { throw [System.Net.WebException]::new('The remote server returned an error: (404) Not Found.') }
+    function Get-NetTCPConnection {
+      param($LocalAddress, $LocalPort, $State, $ErrorAction)
+      [pscustomobject]@{ LocalAddress = $LocalAddress; LocalPort = $LocalPort; State = $State; OwningProcess = 5678 }
+    }
+    function Start-Process { Set-Content -LiteralPath ${quote(started)} -Value 'started' }
+    & ${quote(path.join(dir, 'startup-watchdog.ps1'))} -Port 43216
+  `);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Port 43216 is already in use/);
+  assert.equal(fs.existsSync(started), false, 'watchdog must not spawn when a listener serves a non-health response');
 });
 
 test('Windows port validation rejects invalid values before any network or process operation', { skip: !windows }, t => {

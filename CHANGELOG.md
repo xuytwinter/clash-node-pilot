@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1] - 2026-09-09
+
+- Hide the Windows desktop launch console and surface startup failures through a dialog and local log.
+- Reject occupied ports whose service does not expose Pilot health before starting a child.
+- Adopt the approved sunglasses-cat icon for Windows/macOS and the browser favicon.
+- Verify the installed hidden launch chain and add optional Authenticode signing with honest metadata.
+
 ## [0.4.0] - 2026-09-08
 
 - Add Apple Silicon and Intel macOS application bundles and DMGs with bundled Node.js, source metadata and checksums.

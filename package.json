@@ -1,6 +1,6 @@
 {
   "name": "clash-node-pilot",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Local UI for testing and switching Clash Verge nodes by region",
   "license": "MIT",

@@ -251,7 +251,7 @@ try {
   $code = Invoke-Installer $setup ($installArgs + "/LOG=`"$(Join-Path $root 'reinstall.log')`"")
   Assert-Check ($code -eq 0) 'Same-version installation over an existing installation completed.'
   if ($VerifyIntegration) {
-    Assert-Shortcut $desktopLink (Join-Path $env:WINDIR 'System32\wscript.exe') "`"$(Join-Path $app 'start-clash-node-pilot.vbs')`"
+    Assert-Shortcut $desktopLink (Join-Path $env:WINDIR 'System32\wscript.exe') "`"$(Join-Path $app 'start-clash-node-pilot.vbs')`""
     Assert-Check ((Read-StartupSnapshot) -ceq $startupBefore) 'Optional desktop shortcut creation did not enable autostart.'
   }
   Assert-Check ([IO.File]::ReadAllText($state) -ceq $stateBytes) 'External user state survived reinstall unchanged.'
@@ -317,19 +317,28 @@ try {
     [Environment]::SetEnvironmentVariable($key, $environment[$key], 'Process')
   }
   try {
-    $appProcess = Start-Process -FilePath $node -ArgumentList "`"$(Join-Path $app 'server.js')`"" -WorkingDirectory $app -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $root 'server.stdout.log') -RedirectStandardError (Join-Path $root 'server.stderr.log')
+    $launcher = Join-Path $app 'start-clash-node-pilot.vbs'
+    $code = Invoke-Installer (Join-Path $env:WINDIR 'System32\wscript.exe') @("`"$launcher`"")
+    Assert-Check ($code -eq 0) 'Installed hidden VBS launcher completed successfully.'
   } finally {
     foreach ($key in $previousEnvironment.Keys) { [Environment]::SetEnvironmentVariable($key, $previousEnvironment[$key], 'Process') }
   }
   $health = $null
   $deadline = [DateTime]::UtcNow.AddSeconds(20)
   while ([DateTime]::UtcNow -lt $deadline) {
-    if ($appProcess.HasExited) { throw 'Installed server exited before becoming healthy.' }
+    if (-not $appProcess) {
+      $candidate = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
+        $_.ExecutablePath -ieq $node -and $_.CommandLine -and $_.CommandLine.Contains((Join-Path $app 'server.js'))
+      } | Select-Object -First 1)
+      if ($candidate) { $appProcess = Get-Process -Id ([int]$candidate.ProcessId) -ErrorAction SilentlyContinue }
+    }
+    if ($appProcess -and $appProcess.HasExited) { throw 'Installed server exited before becoming healthy.' }
     try {
       $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -TimeoutSec 2
       if ($health.ok) { break }
     } catch { Start-Sleep -Milliseconds 150 }
   }
+  Assert-Check ($null -ne $appProcess -and -not $appProcess.HasExited) 'Installed VBS launcher started the bundled Node server process.'
   Assert-Check ($health.ok -eq $true -and [int]$health.port -eq $port) 'Installed bundled runtime served health on an isolated random port.'
   $package = Get-Content -LiteralPath (Join-Path $app 'package.json') -Raw | ConvertFrom-Json
   Assert-Check ($health.version -eq $package.version) 'Installed health reports the packaged version.'

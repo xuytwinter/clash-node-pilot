@@ -22,7 +22,7 @@ No Linux desktop, Android, iOS, Electron, browser extension, or ChatGPT/OpenAI i
 
 Version 0.4.0 provides Windows `Setup.exe` and portable ZIP, plus macOS `arm64.dmg` and `x64.dmg`. Choose the Windows installer for Start Menu launch/stop shortcuts; see the [installer guide](docs/windows-installer.md). On Mac, mount the matching DMG, drag the application to Applications and launch it; **CN > Quit** stops its service. See the [Mac guide](docs/macos-delivery.md) for controller selection and Gatekeeper limitations. Published assets and checksums are listed in [Releases](https://github.com/xuytwinter/clash-node-pilot/releases).
 
-1. For Windows portable use, obtain `clash-node-pilot-v0.4.0-windows-x64-portable.zip` and its checksum from [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases). Only tagged releases provide published assets.
+1. For Windows portable use, obtain `clash-node-pilot-v0.4.1-windows-x64-portable.zip` and its checksum from [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases). Only tagged releases provide published assets.
 2. Extract it to any local folder, including paths with spaces or Chinese characters.
 3. Double-click `start-clash-node-pilot.cmd`.
 4. Open `http://127.0.0.1:3210` if the browser does not open automatically.
@@ -135,8 +135,8 @@ The version defaults to `package.json`. Packaging preserves old ZIPs, refuses to
 
 Candidate outputs:
 
-- `outputs\clash-node-pilot-v0.4.0-windows-x64-portable.zip`
-- `outputs\clash-node-pilot-v0.4.0-windows-x64-portable.zip.sha256`
+- `outputs\clash-node-pilot-v0.4.1-windows-x64-portable.zip`
+- `outputs\clash-node-pilot-v0.4.1-windows-x64-portable.zip.sha256`
 
 On macOS, use `bash scripts/build-macos.sh` followed by `bash scripts/smoke-macos.sh`; see the [Mac build guide](docs/macos-delivery.md).
 

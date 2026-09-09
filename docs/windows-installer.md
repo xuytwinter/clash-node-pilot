@@ -8,6 +8,8 @@ Choose `clash-node-pilot-v<VERSION>-windows-x64-setup.exe` and verify its `.sha2
 
 Initial installers are unsigned. The SHA256 verifies file integrity, not publisher identity or SmartScreen reputation. Do not describe these builds as signed Windows releases.
 
+Version 0.4.1 uses the sunglasses-cat icon and a hidden Windows Script Host launcher. VBScript/Windows Script Host must be available; managed systems may disable it. Startup failures produce an error dialog and `launcher.log` beside the state file. A process occupying the requested port is reported, not stopped. Optional Authenticode signing uses a trusted private-key certificate in the build account's certificate store via `CLASH_PILOT_SIGNING_THUMBPRINT`; no such certificate is configured for this release.
+
 ## Stop, Upgrade and Uninstall
 
 Closing the browser leaves the local service running. Use the installed Stop Node Pilot shortcut before upgrading or uninstalling. The stop helper only targets the exact bundled runtime and server command belonging to that installation. Other Node scripts and proxy-client processes are not selected.
@@ -23,7 +25,7 @@ If an older portable instance already occupies port 3210, stop it through its ow
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File release.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 -SetupPath outputs/clash-node-pilot-v0.4.0-windows-x64-setup.exe
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-installer.ps1 -SetupPath outputs/clash-node-pilot-v0.4.1-windows-x64-setup.exe
 ```
 
 The builder checks portable payload checksums and clean source metadata. It obtains a pinned Inno Setup compiler in `work`, without installing the compiler system-wide. Existing output is preserved instead of overwritten. Installer provenance is recorded alongside its checksum.

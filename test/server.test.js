@@ -103,12 +103,14 @@ test('Windows launch scripts prefer bundled runtime and keep PATH fallback', () 
   const release = fs.readFileSync(path.join(root, 'release.ps1'), 'utf8');
   assert.match(startCmd, /wscript\.exe "%~dp0start-clash-node-pilot\.vbs"/i);
   assert.match(startCmd, /wscript\.exe/i);
-  assert.match(startVbs, /shell\.Run command, 0, False/i);
+  assert.match(startVbs, /shell\.Run\(command, 0, True\)/i);
   const launcher = fs.readFileSync(path.join(root, 'start-pilot.ps1'), 'utf8');
   assert.match(launcher, /startup-watchdog\.ps1/);
   assert.match(launcher, /LASTEXITCODE/);
   assert.match(watchdog, /runtime\\node\.exe/);
   assert.match(watchdog, /Get-Command node\.exe/);
+  assert.match(watchdog, /Get-NetTCPConnection -LocalAddress '127\.0\.0\.1' -LocalPort/);
+  assert.match(watchdog, /already in use by process/);
   assert.match(install, /install-pilot-autostart\.ps1/);
   assert.match(release, /'src'/);
   assert.match(release, /Test-PilotLaunch -AppDir \$stageDir/);

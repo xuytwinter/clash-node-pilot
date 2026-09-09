@@ -22,7 +22,7 @@ Clash Node Pilot 是一个运行在 Windows 和 macOS 本机的 Clash/Mihomo 节
 
 0.4.0 提供 Windows `Setup.exe`、便携 ZIP，以及 Mac `arm64.dmg`（Apple Silicon）和 `x64.dmg`（Intel）。Windows 安装版包含开始菜单启动与停止入口，详见[安装程序说明](docs/windows-installer.md)。Mac 挂载对应 DMG，将应用拖到 Applications 后打开，使用菜单栏 **CN > Quit** 停止服务；配置选择与 Gatekeeper 限制见 [Mac 指南](docs/macos-delivery.md)。正式附件与校验文件见 [Releases](https://github.com/xuytwinter/clash-node-pilot/releases)。
 
-1. 使用 Windows 便携版时，从 [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases) 获取 `clash-node-pilot-v0.4.0-windows-x64-portable.zip` 及校验文件。发布产物以已打标签的 Release 为准。
+1. 使用 Windows 便携版时，从 [GitHub Releases](https://github.com/xuytwinter/clash-node-pilot/releases) 获取 `clash-node-pilot-v0.4.1-windows-x64-portable.zip` 及校验文件。发布产物以已打标签的 Release 为准。
 2. 解压到任意本地目录，支持空格和中文路径。
 3. 双击 `start-clash-node-pilot.cmd`。
 4. 如果浏览器没有自动打开，手动访问 `http://127.0.0.1:3210`。
@@ -135,8 +135,8 @@ npm run smoke:package
 
 候选输出：
 
-- `outputs\clash-node-pilot-v0.4.0-windows-x64-portable.zip`
-- `outputs\clash-node-pilot-v0.4.0-windows-x64-portable.zip.sha256`
+- `outputs\clash-node-pilot-v0.4.1-windows-x64-portable.zip`
+- `outputs\clash-node-pilot-v0.4.1-windows-x64-portable.zip.sha256`
 
 macOS 使用 `bash scripts/build-macos.sh` 构建、`bash scripts/smoke-macos.sh` 验收，详见 [Mac 构建指南](docs/macos-delivery.md)。
 
