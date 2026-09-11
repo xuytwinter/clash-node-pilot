@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash Node Pilot</h1>
 <p align="center">运行在本机的 Clash/Mihomo 节点健康监测与优选控制台。</p>
-<p align="center"><a href="README.md">English</a> · <a href="https://github.com/xuytwinter/clash-node-pilot/releases/latest">下载安装包</a> · <a href="docs/ROADMAP.md">路线图</a> · <a href="packaging/icons/README.md">图标使用</a></p>
+<p align="center"><a href="README.md">English</a> · <strong>简体中文</strong> · <a href="README.zh-Hant.md">繁體中文</a> · <a href="https://github.com/xuytwinter/clash-node-pilot/releases/latest">下载安装包</a> · <a href="docs/ROADMAP.md">路线图</a> · <a href="packaging/icons/README.md">图标使用</a></p>
 <p align="center">
   <a href="https://github.com/xuytwinter/clash-node-pilot/releases/latest"><img src="https://img.shields.io/github/v/release/xuytwinter/clash-node-pilot" alt="Latest release"></a>
   <a href="https://github.com/xuytwinter/clash-node-pilot/actions/workflows/ci.yml"><img src="https://github.com/xuytwinter/clash-node-pilot/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>

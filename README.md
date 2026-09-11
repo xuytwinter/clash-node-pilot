@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">Clash Node Pilot</h1>
 <p align="center">A local dashboard for Clash/Mihomo node health and selection.</p>
-<p align="center"><a href="README.zh-CN.md">中文</a> · <a href="https://github.com/xuytwinter/clash-node-pilot/releases/latest">Download</a> · <a href="docs/ROADMAP.md">Roadmap</a> · <a href="packaging/icons/README.md">Icon</a></p>
+<p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-Hant.md">繁體中文</a> · <a href="https://github.com/xuytwinter/clash-node-pilot/releases/latest">Download</a> · <a href="docs/ROADMAP.md">Roadmap</a> · <a href="packaging/icons/README.md">Icon</a></p>
 <p align="center">
   <a href="https://github.com/xuytwinter/clash-node-pilot/releases/latest"><img src="https://img.shields.io/github/v/release/xuytwinter/clash-node-pilot" alt="Latest release"></a>
   <a href="https://github.com/xuytwinter/clash-node-pilot/actions/workflows/ci.yml"><img src="https://github.com/xuytwinter/clash-node-pilot/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
@@ -149,7 +149,8 @@ On macOS, use `bash scripts/build-macos.sh` followed by `bash scripts/smoke-maco
 
 ## Documentation
 
-- [Chinese README](README.zh-CN.md)
+- [Simplified Chinese README](README.zh-CN.md)
+- [Traditional Chinese README](README.zh-Hant.md)
 - [Architecture](docs/architecture.md)
 - [Compatibility](docs/compatibility.md)
 - [Demo Mode](docs/demo.md)
